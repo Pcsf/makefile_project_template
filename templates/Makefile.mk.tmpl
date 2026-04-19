@@ -1,0 +1,39 @@
+# ==============================================================================
+# Makefile.mk — Reference template
+#
+# This file is the canonical template that scan_project.sh/.bat uses to
+# generate a Makefile.mk in each source directory.
+#
+# DO NOT place this file in source directories directly — run 'make scan'.
+#
+# HOW IT WORKS
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. _THIS_DIR uses $(lastword $(MAKEFILE_LIST)) to capture the path of the
+#    Makefile.mk being included at parse time (a well-known GNU make idiom).
+#
+# 2. Because C_SRCS/CXX_SRCS/etc. are initialised with ':=' in the root
+#    Makefile, every '+=' line here expands $(wildcard …) immediately when
+#    the file is parsed — not lazily when the variable is used.
+#    → Source lists are always up-to-date on each 'make' invocation.
+#
+# 3. Adding/removing files within an existing directory: automatic.
+#    Adding a NEW directory: run 'make scan' once.
+# ==============================================================================
+
+# Capture this file's directory at include time
+_THIS_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+
+# C sources
+C_SRCS    += $(wildcard $(_THIS_DIR)*.c)
+
+# C++ sources
+CXX_SRCS  += $(wildcard $(_THIS_DIR)*.cpp $(_THIS_DIR)*.cxx $(_THIS_DIR)*.cc)
+
+# VHDL sources
+VHDL_SRCS += $(wildcard $(_THIS_DIR)*.vhd $(_THIS_DIR)*.vhdl)
+
+# Verilog / SystemVerilog sources
+V_SRCS    += $(wildcard $(_THIS_DIR)*.v $(_THIS_DIR)*.sv)
+
+# Assembly sources
+ASM_SRCS  += $(wildcard $(_THIS_DIR)*.s $(_THIS_DIR)*.S $(_THIS_DIR)*.asm)
