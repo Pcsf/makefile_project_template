@@ -4,7 +4,8 @@
 #
 # ── Compilation order strategy ────────────────────────────────────────────────
 # Same three-layer defence as ghdl.mk:
-#   Layer 1 – VHDL_SRCS global override in project.mk
+#   Layer 1 – VHDL_SRCS_DIR in project.mk: directories in compilation order;
+#              file lists within each directory remain auto-managed
 #   Layer 2 – per-directory .compile_order files (created by 'make scan')
 #   Layer 3 – silent pre-pass below (auto-handles most ordering issues)
 #
