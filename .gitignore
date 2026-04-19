@@ -1,0 +1,46 @@
+# Build output
+build/
+
+# Generated Makefile.mk fragments (recreated by 'make scan')
+# Note: Makefile.mk files checked into version control in make/ and templates/
+#       are NOT ignored — only the auto-generated ones in source trees.
+**/Makefile.mk
+!make/
+!templates/
+
+# Vivado junk
+*.jou
+*.log
+*.str
+vivado_pid*.str
+.Xil/
+NA/
+
+# Quartus generated files
+db/
+incremental_db/
+output_files/
+*.qws
+*.rpt
+*.smsg
+*.sld
+*.pin
+*.pof
+*.rbf
+
+# ModelSim / QuestaSim
+transcript
+vsim.wlf
+*.vcd
+modelsim.ini
+
+# GHDL
+*.cf
+*.o
+*.ghw
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*~
