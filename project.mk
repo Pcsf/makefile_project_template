@@ -21,28 +21,27 @@ TOOLCHAIN := gcc
 # Directory where the scan script starts (default: project root ".")
 SRC_ROOT := .
 
-# ── VHDL compilation order — Layer 1 global override ─────────────────────────
+# ── VHDL_SRCS_DIR: directory-level compilation order (Layer 1) ───────────────
 # VHDL compilation order matters: packages must precede their users, entities
-# must precede their instantiators.  Three layers handle this automatically:
+# must precede their instantiators.  Three layers handle this:
 #
 #   Layer 3 (automatic): ghdl.mk / modelsim.mk run a silent pre-pass that
-#     pre-populates the work library so the real pass finds all dependencies
-#     already compiled.  Handles most designs with no user action.
+#     pre-populates the work library.  Handles most designs with zero effort.
 #
-#   Layer 2 (semi-automatic): 'make scan' creates a .compile_order file in each
-#     VHDL directory listing files alphabetically.  Edit it to set the correct
-#     order.  The file is never overwritten by subsequent 'make scan' runs.
-#     Add new files to it manually when you create them.
+#   Layer 2 (semi-automatic): 'make scan' creates a per-directory .compile_order
+#     listing files alphabetically as a starting point.  Edit it once to set the
+#     correct within-directory order.  Never overwritten by subsequent scans.
 #
-#   Layer 1 (manual — this block): for cross-directory ordering that cannot be
-#     expressed per-directory.  If set, VHDL_SRCS overrides all auto-discovery.
-#     List ALL .vhd/.vhdl files across the whole project in exact order.
+#   Layer 1 (this variable): controls cross-directory order when Layers 2+3
+#     are not enough.  List directories in compilation order — file discovery
+#     within each directory is still fully automatic (via its .compile_order or
+#     $(wildcard)).  All VHDL directories must be listed when this is set.
 #
-# Uncomment and populate only when Layers 2+3 are insufficient:
-# VHDL_SRCS := \
-#     lib/utils_pkg.vhd    \
-#     rtl/my_entity.vhd    \
-#     top/top.vhd
+# Uncomment and populate when cross-directory ordering matters:
+# VHDL_SRCS_DIR := \
+#     hdl/lib      \
+#     hdl/rtl      \
+#     hdl/top
 
 # ── GNU C / C++ settings ──────────────────────────────────────────────────────
 CC       := gcc

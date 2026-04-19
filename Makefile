@@ -88,8 +88,27 @@ else
 # ── Normal build path (Makefile.mk files exist) ───────────────────────────────
 
 # Include all discovered sub-makefiles.
-# Each uses $(wildcard …) internally → source lists refresh every invocation.
+# Each uses .compile_order or $(wildcard) → file lists refresh every invocation.
 include $(SUBMAKEFILES)
+
+# ── VHDL_SRCS_DIR: directory-level cross-directory ordering (Layer 1) ─────────
+# If VHDL_SRCS_DIR is set in project.mk, VHDL_SRCS is rebuilt from that
+# directory list, in order.  Each directory is expanded to its file list using
+# the same logic as the per-directory Makefile.mk: .compile_order when present,
+# $(wildcard) otherwise.  The user only declares directory order — file
+# discovery within each directory remains fully automatic.
+#
+# All VHDL directories must appear in the list when this variable is set,
+# because it replaces the VHDL_SRCS accumulated by the sub-makefiles above.
+_vhdl_dir_srcs = $(if $(wildcard $(1)/.compile_order),\
+    $(addprefix $(1)/,\
+        $(shell grep -v '^[[:space:]]*\#' '$(1)/.compile_order' \
+                | grep -v '^[[:space:]]*$$')),\
+    $(wildcard $(1)/*.vhd $(1)/*.vhdl))
+
+ifneq ($(strip $(VHDL_SRCS_DIR)),)
+VHDL_SRCS := $(foreach d,$(VHDL_SRCS_DIR),$(call _vhdl_dir_srcs,$(strip $d)))
+endif
 
 # Toolchain rules (defines recipe for the primary build target)
 include make/$(TOOLCHAIN).mk

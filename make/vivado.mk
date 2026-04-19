@@ -5,8 +5,8 @@
 # ── Compilation order strategy ────────────────────────────────────────────────
 # Vivado's read_vhdl in non-project (Tcl batch) mode processes files in the
 # order they are listed — same dependency rules as any VHDL tool apply.
-# VHDL_SRCS order is controlled by .compile_order files (Layer 2) or the
-# VHDL_SRCS global override in project.mk (Layer 1).
+# VHDL_SRCS order is controlled by per-directory .compile_order files (Layer 2)
+# or VHDL_SRCS_DIR in project.mk (Layer 1 — list directories in order).
 #
 # Note: Vivado's 'update_compile_order' reorders sources for VHDL-2008 based
 # on its own analysis, but this is unreliable for older VHDL standards and

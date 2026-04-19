@@ -6,8 +6,8 @@
 # Quartus's analysis & synthesis (quartus_map) reads all sources specified in
 # the QSF.  For VHDL, the file order in QSF matters for older VHDL standards;
 # VHDL-2008 in Quartus is more tolerant but still benefits from correct order.
-# VHDL_SRCS order is controlled by .compile_order files (Layer 2) or the
-# VHDL_SRCS global override in project.mk (Layer 1).
+# VHDL_SRCS order is controlled by per-directory .compile_order files (Layer 2)
+# or VHDL_SRCS_DIR in project.mk (Layer 1 — list directories in order).
 # ==============================================================================
 
 QUARTUS_PROJDIR := $(BUILD_DIR)/quartus_proj

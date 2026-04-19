@@ -8,26 +8,25 @@
 # VHDL compilation order is significant: a package or entity must be compiled
 # before any design unit that references it (via 'use', component instantiation,
 # or direct entity instantiation).  The auto-discovered wildcard order is
-# alphabetical and will often be wrong.
+# alphabetical and will often be wrong.  Three layers fix this:
 #
-# Two mechanisms fix this, from most to least automatic:
+# Layer 3 — silent pre-pass (automatic, no user action)
+#   ghdl.mk and modelsim.mk compile all files once silently before the real
+#   pass.  This pre-populates the work library so the real pass finds all
+#   dependencies already compiled, regardless of order in VHDL_SRCS.
+#   Handles most real-world designs with zero effort.
 #
-# 1. Silent pre-pass (Layer 3 — automatic, no user action needed)
-#    ghdl.mk and modelsim.mk compile all files once silently before the real
-#    pass.  This pre-populates the work library so that the real pass finds
-#    all dependencies already compiled, regardless of order in VHDL_SRCS.
-#    Handles most real-world designs automatically.
+# Layer 2 — .compile_order file (per directory, survives rescans)
+#   'make scan' creates a .compile_order file in each VHDL directory, listing
+#   files alphabetically as a starting point.  Edit it to set the correct
+#   within-directory order.  NEVER overwritten by subsequent 'make scan' runs.
+#   This block reads it when present; falls back to $(wildcard) otherwise.
 #
-# 2. .compile_order file (Layer 2 — per directory, survives rescans)
-#    'make scan' creates a .compile_order file in each VHDL directory,
-#    listing files alphabetically as a starting point.  Edit it to reflect the
-#    correct order.  The file is NEVER overwritten by subsequent 'make scan'
-#    invocations, so your edits are preserved.
-#    This block reads it when present; falls back to $(wildcard) otherwise.
-#
-# 3. VHDL_SRCS global override (Layer 1 — for cross-directory ordering)
-#    Set VHDL_SRCS explicitly in project.mk to control the complete, ordered
-#    list across all directories, bypassing both mechanisms above.
+# Layer 1 — VHDL_SRCS_DIR in project.mk (cross-directory ordering)
+#   Set VHDL_SRCS_DIR to a list of directories in compilation order.
+#   The root Makefile assembles VHDL_SRCS by expanding each directory through
+#   its .compile_order (or wildcard) — you declare directory order, file
+#   discovery within each directory stays fully automatic.
 #
 # ── How $(wildcard) auto-update works ────────────────────────────────────────
 # C_SRCS/CXX_SRCS/V_SRCS/ASM_SRCS are initialised with ':=' in the root

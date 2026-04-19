@@ -6,8 +6,11 @@
 # VHDL requires that packages and entities are analysed before any design unit
 # that references them.  Three layers of defence are applied:
 #
-#   Layer 1 – VHDL_SRCS global override in project.mk (manual, full control)
-#   Layer 2 – per-directory .compile_order files (semi-automatic, persistent)
+#   Layer 1 – VHDL_SRCS_DIR in project.mk: list directories in order; each
+#              directory's file list is still auto-managed (.compile_order /
+#              wildcard).  Use this for cross-directory ordering.
+#   Layer 2 – per-directory .compile_order files (created by 'make scan',
+#              never overwritten; controls within-directory order)
 #   Layer 3 – silent pre-pass below (fully automatic, handles most cases)
 #
 # The pre-pass analyses every file once, ignoring errors.  Any file that

@@ -122,13 +122,15 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 
 ---
 
-## How the auto-update mechanism works
+## How source discovery and VHDL ordering work
 
 ### Initial scan
 
 ```
 make scan
   └─ bash scripts/scan_project.sh .
+       ├─ finds hdl/           → writes hdl/Makefile.mk  +  hdl/.compile_order
+       ├─ finds hdl/modules/   → writes hdl/modules/Makefile.mk  +  hdl/modules/.compile_order
        ├─ finds src/           → writes src/Makefile.mk
        └─ finds src/utils/     → writes src/utils/Makefile.mk
 ```
@@ -140,7 +142,14 @@ _THIS_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 
 C_SRCS    += $(wildcard $(_THIS_DIR)*.c)
 CXX_SRCS  += $(wildcard $(_THIS_DIR)*.cpp $(_THIS_DIR)*.cxx $(_THIS_DIR)*.cc)
+
+# VHDL: uses .compile_order when present, wildcard otherwise
+ifneq ($(wildcard $(_THIS_DIR).compile_order),)
+VHDL_SRCS += $(addprefix $(_THIS_DIR),$(shell grep -v '^[[:space:]]*#' …))
+else
 VHDL_SRCS += $(wildcard $(_THIS_DIR)*.vhd $(_THIS_DIR)*.vhdl)
+endif
+
 V_SRCS    += $(wildcard $(_THIS_DIR)*.v   $(_THIS_DIR)*.sv)
 ASM_SRCS  += $(wildcard $(_THIS_DIR)*.s   $(_THIS_DIR)*.S   $(_THIS_DIR)*.asm)
 ```
@@ -148,20 +157,67 @@ ASM_SRCS  += $(wildcard $(_THIS_DIR)*.s   $(_THIS_DIR)*.S   $(_THIS_DIR)*.asm)
 ### Subsequent builds
 
 The root `Makefile` initialises `C_SRCS :=` (simple-expanded) **before**
-including the fragments.  This means every `+=` with `$(wildcard …)` expands
-**immediately** at parse time, so the source list is always current without
-touching the `Makefile.mk` files.
+including the fragments.  Because `C_SRCS` is a simple-expanded variable, every
+`+=` with `$(wildcard …)` expands **immediately** at parse time — source lists
+are always current with no rescanning.
 
 ```
 make
-  ├─ root Makefile: C_SRCS :=
-  ├─ include src/Makefile.mk      → C_SRCS = src/main.c
-  ├─ include src/utils/Makefile.mk → C_SRCS += src/utils/utils.c
+  ├─ root Makefile: C_SRCS :=, VHDL_SRCS :=, …
+  ├─ include src/Makefile.mk          → C_SRCS = src/main.c
+  ├─ include src/utils/Makefile.mk    → C_SRCS += src/utils/utils.c
+  ├─ include hdl/modules/Makefile.mk  → VHDL_SRCS = hdl/modules/counter.vhd  (from .compile_order)
+  ├─ include hdl/Makefile.mk          → VHDL_SRCS += hdl/top.vhd              (from .compile_order)
   └─ compile & link
 ```
 
 Add `new_file.c` to `src/` → next `make` picks it up automatically.
 Add a new directory `src/hal/` with `.c` files → run `make scan` once.
+
+---
+
+## VHDL compilation order
+
+VHDL requires packages and entities to be compiled before any design unit that
+references them.  Three layers handle this, from most to least automatic:
+
+### Layer 3 — silent pre-pass (automatic)
+
+`ghdl.mk` and `modelsim.mk` compile all VHDL files once with errors silenced
+before the real pass.  Any file that succeeds pre-populates the work library so
+the real pass finds all dependencies already there.  **Most designs need no
+further action.**
+
+### Layer 2 — `.compile_order` file (per directory)
+
+`make scan` creates a `.compile_order` in each VHDL directory listing files
+alphabetically as a starting point.  **Edit it once** to set the correct
+within-directory order.  It is **never overwritten** by subsequent `make scan`
+runs, so your edits survive.  Commit it alongside your source files.
+
+```
+hdl/modules/.compile_order
+  # list counter before any entity that instantiates it
+  counter.vhd
+```
+
+### Layer 1 — `VHDL_SRCS_DIR` (cross-directory ordering)
+
+When a package in one directory is used by entities in another, set
+`VHDL_SRCS_DIR` in `project.mk` to list **directories** in compilation order.
+The root Makefile expands each directory through its `.compile_order` (or
+wildcard) — **you declare directory order, file discovery stays automatic**.
+
+```makefile
+# project.mk
+VHDL_SRCS_DIR := \
+    hdl/lib         \   # packages compiled first
+    hdl/rtl         \   # entities that use those packages
+    hdl/top             # top-level that instantiates rtl entities
+```
+
+This replaces what the per-directory `Makefile.mk` fragments accumulated, so
+**all** VHDL directories must appear in the list when this variable is set.
 
 ---
 
