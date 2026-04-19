@@ -2,11 +2,14 @@
 build/
 
 # Generated Makefile.mk fragments (recreated by 'make scan')
-# Note: Makefile.mk files checked into version control in make/ and templates/
-#       are NOT ignored — only the auto-generated ones in source trees.
+# Note: Makefile.mk files in make/ and templates/ are NOT ignored.
 **/Makefile.mk
 !make/
 !templates/
+
+# .compile_order files are intentionally NOT ignored — they encode the VHDL
+# compilation order decided by the developer and must be version-controlled.
+# (They are created by 'make scan' and edited by the user; never overwritten.)
 
 # Vivado junk
 *.jou

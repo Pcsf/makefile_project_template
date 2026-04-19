@@ -21,6 +21,29 @@ TOOLCHAIN := gcc
 # Directory where the scan script starts (default: project root ".")
 SRC_ROOT := .
 
+# ── VHDL compilation order — Layer 1 global override ─────────────────────────
+# VHDL compilation order matters: packages must precede their users, entities
+# must precede their instantiators.  Three layers handle this automatically:
+#
+#   Layer 3 (automatic): ghdl.mk / modelsim.mk run a silent pre-pass that
+#     pre-populates the work library so the real pass finds all dependencies
+#     already compiled.  Handles most designs with no user action.
+#
+#   Layer 2 (semi-automatic): 'make scan' creates a .compile_order file in each
+#     VHDL directory listing files alphabetically.  Edit it to set the correct
+#     order.  The file is never overwritten by subsequent 'make scan' runs.
+#     Add new files to it manually when you create them.
+#
+#   Layer 1 (manual — this block): for cross-directory ordering that cannot be
+#     expressed per-directory.  If set, VHDL_SRCS overrides all auto-discovery.
+#     List ALL .vhd/.vhdl files across the whole project in exact order.
+#
+# Uncomment and populate only when Layers 2+3 are insufficient:
+# VHDL_SRCS := \
+#     lib/utils_pkg.vhd    \
+#     rtl/my_entity.vhd    \
+#     top/top.vhd
+
 # ── GNU C / C++ settings ──────────────────────────────────────────────────────
 CC       := gcc
 CXX      := g++

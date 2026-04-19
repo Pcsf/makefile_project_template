@@ -1,39 +1,67 @@
 # ==============================================================================
 # Makefile.mk — Reference template
 #
-# This file is the canonical template that scan_project.sh/.bat uses to
-# generate a Makefile.mk in each source directory.
+# This is the canonical template used by scan_project.sh/.bat.
+# DO NOT copy this into source directories — run 'make scan' instead.
 #
-# DO NOT place this file in source directories directly — run 'make scan'.
+# ── How VHDL ordering works ───────────────────────────────────────────────────
+# VHDL compilation order is significant: a package or entity must be compiled
+# before any design unit that references it (via 'use', component instantiation,
+# or direct entity instantiation).  The auto-discovered wildcard order is
+# alphabetical and will often be wrong.
 #
-# HOW IT WORKS
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. _THIS_DIR uses $(lastword $(MAKEFILE_LIST)) to capture the path of the
-#    Makefile.mk being included at parse time (a well-known GNU make idiom).
+# Two mechanisms fix this, from most to least automatic:
 #
-# 2. Because C_SRCS/CXX_SRCS/etc. are initialised with ':=' in the root
-#    Makefile, every '+=' line here expands $(wildcard …) immediately when
-#    the file is parsed — not lazily when the variable is used.
-#    → Source lists are always up-to-date on each 'make' invocation.
+# 1. Silent pre-pass (Layer 3 — automatic, no user action needed)
+#    ghdl.mk and modelsim.mk compile all files once silently before the real
+#    pass.  This pre-populates the work library so that the real pass finds
+#    all dependencies already compiled, regardless of order in VHDL_SRCS.
+#    Handles most real-world designs automatically.
 #
-# 3. Adding/removing files within an existing directory: automatic.
-#    Adding a NEW directory: run 'make scan' once.
+# 2. .compile_order file (Layer 2 — per directory, survives rescans)
+#    'make scan' creates a .compile_order file in each VHDL directory,
+#    listing files alphabetically as a starting point.  Edit it to reflect the
+#    correct order.  The file is NEVER overwritten by subsequent 'make scan'
+#    invocations, so your edits are preserved.
+#    This block reads it when present; falls back to $(wildcard) otherwise.
+#
+# 3. VHDL_SRCS global override (Layer 1 — for cross-directory ordering)
+#    Set VHDL_SRCS explicitly in project.mk to control the complete, ordered
+#    list across all directories, bypassing both mechanisms above.
+#
+# ── How $(wildcard) auto-update works ────────────────────────────────────────
+# C_SRCS/CXX_SRCS/V_SRCS/ASM_SRCS are initialised with ':=' in the root
+# Makefile before sub-makefiles are included.  This makes every '+=' here
+# expand $(wildcard …) immediately at parse time — giving an always-current
+# file list on every 'make' invocation without rescanning.
 # ==============================================================================
 
-# Capture this file's directory at include time
+# Capture this file's directory at include time (standard GNU make idiom)
 _THIS_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
 
-# C sources
+# ── C sources ─────────────────────────────────────────────────────────────────
 C_SRCS    += $(wildcard $(_THIS_DIR)*.c)
 
-# C++ sources
+# ── C++ sources ───────────────────────────────────────────────────────────────
 CXX_SRCS  += $(wildcard $(_THIS_DIR)*.cpp $(_THIS_DIR)*.cxx $(_THIS_DIR)*.cc)
 
-# VHDL sources
+# ── VHDL sources ──────────────────────────────────────────────────────────────
+# VHDL compilation order matters: packages must precede their users, entities
+# must precede their instantiators.  Create/edit .compile_order (one filename
+# per line, no paths) to control order.  The toolchain makefiles also run a
+# silent pre-pass to auto-resolve simple out-of-order cases.
+ifneq ($(wildcard $(_THIS_DIR).compile_order),)
+# .compile_order found — use explicit order (strips # comments and blank lines)
+VHDL_SRCS += $(addprefix $(_THIS_DIR),\
+    $(shell grep -v '^[[:space:]]*#' '$(_THIS_DIR).compile_order' \
+            | grep -v '^[[:space:]]*$$'))
+else
+# No .compile_order — alphabetical fallback (run 'make scan' to create one)
 VHDL_SRCS += $(wildcard $(_THIS_DIR)*.vhd $(_THIS_DIR)*.vhdl)
+endif
 
-# Verilog / SystemVerilog sources
+# ── Verilog / SystemVerilog sources ───────────────────────────────────────────
 V_SRCS    += $(wildcard $(_THIS_DIR)*.v $(_THIS_DIR)*.sv)
 
-# Assembly sources
+# ── Assembly sources ──────────────────────────────────────────────────────────
 ASM_SRCS  += $(wildcard $(_THIS_DIR)*.s $(_THIS_DIR)*.S $(_THIS_DIR)*.asm)
