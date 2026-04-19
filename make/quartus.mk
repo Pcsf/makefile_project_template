@@ -1,6 +1,13 @@
 # ==============================================================================
 # quartus.mk — Intel/Altera Quartus Prime toolchain rules
 # Handles: VHDL / Verilog / SV → synthesis → fit → assembly → STA → .sof
+#
+# ── Compilation order strategy ────────────────────────────────────────────────
+# Quartus's analysis & synthesis (quartus_map) reads all sources specified in
+# the QSF.  For VHDL, the file order in QSF matters for older VHDL standards;
+# VHDL-2008 in Quartus is more tolerant but still benefits from correct order.
+# VHDL_SRCS order is controlled by .compile_order files (Layer 2) or the
+# VHDL_SRCS global override in project.mk (Layer 1).
 # ==============================================================================
 
 QUARTUS_PROJDIR := $(BUILD_DIR)/quartus_proj
@@ -8,8 +15,7 @@ QSF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).qsf
 QPF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).qpf
 SOF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).sof
 
-# Relative path prefix from project dir to repo root (used in QSF file refs)
-_ROOT_REL       := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../../")
+_ROOT_REL := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../../")
 
 .PHONY: all synth fit asm sta program
 
@@ -19,6 +25,8 @@ $(QUARTUS_PROJDIR):
 	$(MKDIR) $(QUARTUS_PROJDIR)
 
 # ── Generate Quartus project files ────────────────────────────────────────────
+# VHDL_FILE assignments are written in VHDL_SRCS order, which reflects the
+# .compile_order files produced by 'make scan'.
 $(QPF_FILE): | $(QUARTUS_PROJDIR)
 	@echo "[QUARTUS] Generating project file: $(QPF_FILE)"
 	@( \
@@ -47,13 +55,13 @@ synth: $(QSF_FILE)
 	    --source=$(QSF_FILE) \
 	    $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
 
-# ── Fitter (place and route) ─────────────────────────────────────────────────
+# ── Fitter ────────────────────────────────────────────────────────────────────
 fit: synth
 	@echo "[QUARTUS] Fitting..."
 	$(QUARTUS_FIT) --read_settings_files=on --write_settings_files=off \
 	    $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
 
-# ── Assembler (generate programming files) ────────────────────────────────────
+# ── Assembler ─────────────────────────────────────────────────────────────────
 asm: fit
 	@echo "[QUARTUS] Assembly (generating .sof)..."
 	$(QUARTUS_ASM) --read_settings_files=on --write_settings_files=off \
@@ -65,7 +73,7 @@ sta: asm
 	$(QUARTUS_STA) $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
 	@echo "[QUARTUS] Build complete: $(SOF_FILE)"
 
-# ── Program device (via quartus_pgm) ─────────────────────────────────────────
+# ── Program device ────────────────────────────────────────────────────────────
 program:
 	@echo "[QUARTUS] Programming device..."
 	quartus_pgm -m jtag -o "p;$(SOF_FILE)"

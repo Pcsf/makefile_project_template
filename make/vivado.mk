@@ -1,6 +1,17 @@
 # ==============================================================================
 # vivado.mk — Xilinx Vivado toolchain rules
 # Handles: VHDL / Verilog / SV + XDC constraints → synthesis → impl → bitstream
+#
+# ── Compilation order strategy ────────────────────────────────────────────────
+# Vivado's read_vhdl in non-project (Tcl batch) mode processes files in the
+# order they are listed — same dependency rules as any VHDL tool apply.
+# VHDL_SRCS order is controlled by .compile_order files (Layer 2) or the
+# VHDL_SRCS global override in project.mk (Layer 1).
+#
+# Note: Vivado's 'update_compile_order' reorders sources for VHDL-2008 based
+# on its own analysis, but this is unreliable for older VHDL standards and
+# for configurations / packages that span library boundaries.  Relying on
+# explicit order (Layers 1/2) is safer.
 # ==============================================================================
 
 VIVADO_PROJDIR := $(BUILD_DIR)/vivado_proj
@@ -16,6 +27,9 @@ $(BUILD_DIR) $(VIVADO_PROJDIR):
 	$(MKDIR) $@
 
 # ── Generate Tcl build script ─────────────────────────────────────────────────
+# VHDL files are added in VHDL_SRCS order (set by .compile_order / project.mk).
+# update_compile_order is called as a safety net for VHDL-2008 projects; it
+# does NOT reorder for older standards.
 tcl: | $(BUILD_DIR)
 	@echo "[VIVADO] Generating Tcl script → $(VIVADO_TCL)"
 	@( \

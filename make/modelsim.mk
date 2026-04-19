@@ -1,6 +1,16 @@
 # ==============================================================================
 # modelsim.mk — ModelSim / QuestaSim HDL simulator toolchain rules
-# Handles: .vhd/.vhdl (.v/.sv Verilog) → compile → simulate
+# Handles: .vhd/.vhdl + .v/.sv → compile → simulate
+#
+# ── Compilation order strategy ────────────────────────────────────────────────
+# Same three-layer defence as ghdl.mk:
+#   Layer 1 – VHDL_SRCS global override in project.mk
+#   Layer 2 – per-directory .compile_order files (created by 'make scan')
+#   Layer 3 – silent pre-pass below (auto-handles most ordering issues)
+#
+# vcom fails fast on an unresolved reference but succeeds if the referenced
+# unit is already in the work library from a previous run.  The pre-pass
+# compiles as many files as possible so the real pass finds all dependencies.
 # ==============================================================================
 
 VSIM_WORKDIR := $(BUILD_DIR)/modelsim_work
@@ -18,21 +28,33 @@ $(VSIM_WORKDIR)/$(VSIM_WORK)/_info: | $(VSIM_WORKDIR)
 	$(VLIB) $(VSIM_WORKDIR)/$(VSIM_WORK)
 	$(VMAP) $(VSIM_WORK) $(VSIM_WORKDIR)/$(VSIM_WORK)
 
-# ── Compile VHDL ─────────────────────────────────────────────────────────────
+# ── Compile ───────────────────────────────────────────────────────────────────
 compile: $(VSIM_WORKDIR)/$(VSIM_WORK)/_info
 ifneq ($(strip $(VHDL_SRCS)),)
-	@echo "[MSIM] Compiling $(words $(VHDL_SRCS)) VHDL file(s)..."
+	@echo "[MSIM] VHDL pre-pass ($(words $(VHDL_SRCS)) file(s), errors silenced)..."
 	@$(foreach f,$(VHDL_SRCS),\
-	    echo "  [VCOM] $(f)" && \
 	    $(VCOM) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
-	            -work $(VSIM_WORK) -$(GHDL_STD) $(f) || exit 1;)
+	            -work $(VSIM_WORK) -$(GHDL_STD) $(f) 2>/dev/null;) true
+	@echo "[MSIM] VHDL final pass:"
+	@$(foreach f,$(VHDL_SRCS),\
+	    printf '  [VCOM] %s\n' '$(f)' && \
+	    $(VCOM) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
+	            -work $(VSIM_WORK) -$(GHDL_STD) $(f) || \
+	    { echo '[MSIM] FAILED on: $(f)'; \
+	      echo '[MSIM] Fix: check .compile_order or set VHDL_SRCS in project.mk'; \
+	      exit 1; };)
 endif
 ifneq ($(strip $(V_SRCS)),)
-	@echo "[MSIM] Compiling $(words $(V_SRCS)) Verilog/SV file(s)..."
+	@echo "[MSIM] Verilog/SV pre-pass ($(words $(V_SRCS)) file(s), errors silenced)..."
 	@$(foreach f,$(V_SRCS),\
-	    echo "  [VLOG] $(f)" && \
 	    $(VLOG) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
-	            -work $(VSIM_WORK) $(f) || exit 1;)
+	            -work $(VSIM_WORK) $(f) 2>/dev/null;) true
+	@echo "[MSIM] Verilog/SV final pass:"
+	@$(foreach f,$(V_SRCS),\
+	    printf '  [VLOG] %s\n' '$(f)' && \
+	    $(VLOG) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
+	            -work $(VSIM_WORK) $(f) || \
+	    { echo '[MSIM] FAILED on: $(f)'; exit 1; };)
 endif
 
 # ── Simulate ─────────────────────────────────────────────────────────────────
