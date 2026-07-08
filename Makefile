@@ -100,9 +100,14 @@ include $(SUBMAKEFILES)
 #
 # All VHDL directories must appear in the list when this variable is set,
 # because it replaces the VHDL_SRCS accumulated by the sub-makefiles above.
+# Literal '#' for use inside function calls: make >= 4.3 no longer strips
+# the backslash of '\#' there, which leaks '\#' into the shell command
+# (grep then warns "stray \ before #").  Escaping in a plain variable
+# assignment works on every make version, so route the '#' through _HASH.
+_HASH := \#
 _vhdl_dir_srcs = $(if $(wildcard $(1)/.compile_order),\
     $(addprefix $(1)/,\
-        $(shell grep -v '^[[:space:]]*\#' '$(1)/.compile_order' \
+        $(shell grep -v '^[[:space:]]*$(_HASH)' '$(1)/.compile_order' \
                 | grep -v '^[[:space:]]*$$')),\
     $(wildcard $(1)/*.vhd $(1)/*.vhdl))
 
