@@ -50,21 +50,24 @@ make scan
 ## Using as a git submodule (recommended)
 
 Instead of copying the template into each project, embed it as a submodule so
-a plain `git pull` (or `git submodule update --remote`) brings in template
-updates without touching your project:
+a plain `git pull` inside the submodule brings in template updates without
+touching your project. The checkout path is free — a short name like `mk/`
+keeps invocations tidy:
 
 ```bash
 cd my_project
-git submodule add https://github.com/Pcsf/makefile_project_template
+git submodule add https://github.com/Pcsf/makefile_project_template mk
 
 # One-line root Makefile that delegates to the template:
-echo 'include makefile_project_template/Makefile' > Makefile
+echo 'include mk/Makefile' > Makefile
 
 # Project configuration lives in YOUR repo, next to the root Makefile:
-cp makefile_project_template/project.mk .
+cp mk/project.mk .
 $EDITOR project.mk
 
 make
+git add .gitmodules mk Makefile project.mk
+git commit -m "Add make-based build via makefile_project_template submodule"
 ```
 
 The template detects that it is included from a parent directory and resolves
@@ -73,13 +76,58 @@ its own `make/` and `scripts/` paths accordingly; its internal tree
 `project.mk`, the generated `Makefile.mk` fragments, and the `.compile_order`
 files all live in the consuming project — the submodule stays pristine.
 
+Anyone cloning the consuming project needs the submodule populated before the
+first build:
+
+```bash
+git clone --recurse-submodules <project-url>
+# or, in an existing clone:
+git submodule update --init
+```
+
 Updating the template later:
 
 ```bash
-git -C makefile_project_template pull origin HEAD
-git add makefile_project_template
+git -C mk pull
+git add mk
 git commit -m "Update makefile template"
 ```
+
+### Worked example: a VHDL simulation project
+
+[cdc-lib](https://github.com/Pcsf/cdc-lib) uses this exact setup to run a
+GHDL testbench. Its layout:
+
+```
+cdc-lib/
+├── Makefile             ← 'include mk/Makefile' (one line)
+├── project.mk           ← project configuration (see below)
+├── mk/                  ← this template, as a submodule
+├── src/                 ← VHDL sources
+│   └── .compile_order   ← within-directory compile order (committed)
+└── tb/                  ← testbench
+    └── .compile_order
+```
+
+The relevant `project.mk` settings:
+
+```makefile
+PROJECT_NAME := cdc_lib
+TOOLCHAIN    := ghdl
+
+# src (package + entities) before tb (instantiates them):
+VHDL_SRCS_DIR := \
+    src          \
+    tb
+
+GHDL_STD := 93
+GHDL_TOP := tb_cdc_lib
+```
+
+With that in place, `make` scans on the first run, analyses everything in the
+declared order, elaborates `tb_cdc_lib`, and runs the simulation with a VCD
+written to `build/`. The consuming repo ignores the generated fragments
+(`**/Makefile.mk` in `.gitignore`) and commits the `.compile_order` files.
 
 ---
 
