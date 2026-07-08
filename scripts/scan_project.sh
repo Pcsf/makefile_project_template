@@ -2,7 +2,11 @@
 # ==============================================================================
 # scan_project.sh — Scan project tree and generate Makefile.mk files
 #
-# Usage: bash scripts/scan_project.sh [root_dir]
+# Usage: bash scripts/scan_project.sh [root_dir] [extra_exclude ...]
+#
+# Arguments after root_dir are additional exclude patterns (paths relative to
+# root_dir) — the root Makefile passes the template's own directory when the
+# template is embedded in a consuming project (e.g. as a git submodule).
 #
 # For each directory that contains recognised source files, the script:
 #   1. Creates/updates Makefile.mk  — uses $(wildcard) for C/C++/ASM/Verilog
@@ -27,11 +31,14 @@ set -euo pipefail
 
 ROOT="${1:-.}"
 ROOT="$(realpath "$ROOT")"
+if [[ $# -gt 0 ]]; then shift; fi
 
 EXCLUDE_PATTERNS=(
     ".git" "build" "make" "templates" "scripts"
     "__pycache__" "node_modules" ".cache"
 )
+# Remaining arguments: extra exclude patterns (see usage above)
+EXCLUDE_PATTERNS+=( "$@" )
 
 SOURCE_EXTS=( "*.c" "*.cpp" "*.cxx" "*.cc" "*.vhd" "*.vhdl" "*.v" "*.sv" "*.s" "*.S" "*.asm" )
 VHDL_EXTS=(   "*.vhd" "*.vhdl" )
