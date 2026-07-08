@@ -47,6 +47,42 @@ make scan
 
 ---
 
+## Using as a git submodule (recommended)
+
+Instead of copying the template into each project, embed it as a submodule so
+a plain `git pull` (or `git submodule update --remote`) brings in template
+updates without touching your project:
+
+```bash
+cd my_project
+git submodule add https://github.com/Pcsf/makefile_project_template
+
+# One-line root Makefile that delegates to the template:
+echo 'include makefile_project_template/Makefile' > Makefile
+
+# Project configuration lives in YOUR repo, next to the root Makefile:
+cp makefile_project_template/project.mk .
+$EDITOR project.mk
+
+make
+```
+
+The template detects that it is included from a parent directory and resolves
+its own `make/` and `scripts/` paths accordingly; its internal tree
+(`example/`, `make/`, …) is automatically excluded from source scanning.
+`project.mk`, the generated `Makefile.mk` fragments, and the `.compile_order`
+files all live in the consuming project — the submodule stays pristine.
+
+Updating the template later:
+
+```bash
+git -C makefile_project_template pull origin HEAD
+git add makefile_project_template
+git commit -m "Update makefile template"
+```
+
+---
+
 ## Directory layout
 
 ```

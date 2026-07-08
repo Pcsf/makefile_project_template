@@ -14,17 +14,42 @@
 # Supported TOOLCHAIN values: gcc  gxx  ghdl  modelsim  vivado  quartus
 # ==============================================================================
 
+# ── Template location (supports use as a git submodule) ──────────────────────
+# The template does not have to be the project root: a consuming project can
+# keep it as a git submodule and use a one-line root Makefile:
+#
+#     include makefile_project_template/Makefile
+#
+# (or invoke 'make -f makefile_project_template/Makefile').  TEMPLATE_DIR is
+# this Makefile's directory relative to the working directory, with trailing
+# slash — empty when the template itself is the project root.  It must be
+# computed before any other makefile is included.
+TEMPLATE_DIR := $(dir $(lastword $(MAKEFILE_LIST)))
+ifeq ($(TEMPLATE_DIR),./)
+    TEMPLATE_DIR :=
+endif
+
+# When embedded in a consuming project, the template's own tree (example/,
+# make/, …) must be excluded from source discovery.  TEMPLATE_EXCLUDE is the
+# extra pattern handed to the scan scripts; TEMPLATE_FIND_EXCLUDE the extra
+# find(1) filter (recursively expanded — SRC_ROOT is not yet known here).
+ifneq ($(TEMPLATE_DIR),)
+    TEMPLATE_EXCLUDE      := $(patsubst %/,%,$(TEMPLATE_DIR))
+    TEMPLATE_FIND_EXCLUDE  = -not -path "$(SRC_ROOT)/$(TEMPLATE_EXCLUDE)/*"
+    TPL_WIN_EXCL          := \$(lastword $(subst /, ,$(TEMPLATE_EXCLUDE)))\\
+endif
+
 # ── OS detection ──────────────────────────────────────────────────────────────
 ifeq ($(OS),Windows_NT)
     HOST_OS     := Windows
-    SCAN_SCRIPT := scripts\scan_project.bat
+    SCAN_SCRIPT := $(subst /,\,$(TEMPLATE_DIR))scripts\scan_project.bat
     RMDIR       := cmd /C rmdir /Q /S
     MKDIR       := cmd /C mkdir
     NULL        := NUL
-    FIND_MK     := $(shell cmd /C "dir /B /S Makefile.mk 2>NUL | findstr /V ""\make\\ \templates\\ \scripts\\ \build\\ \.git\\"" ")
+    FIND_MK     := $(shell cmd /C "dir /B /S Makefile.mk 2>NUL | findstr /V ""\make\\ \templates\\ \scripts\\ \build\\ \.git\\ $(TPL_WIN_EXCL)"" ")
 else
     HOST_OS     := $(shell uname -s)
-    SCAN_SCRIPT := scripts/scan_project.sh
+    SCAN_SCRIPT := $(TEMPLATE_DIR)scripts/scan_project.sh
     RMDIR       := rm -rf
     MKDIR       := mkdir -p
     NULL        := /dev/null
@@ -58,6 +83,7 @@ else
         -not -path "*/templates/*" \
         -not -path "*/scripts/*" \
         -not -path "*/$(BUILD_DIR)/*" \
+        $(TEMPLATE_FIND_EXCLUDE) \
         2>$(NULL))
 endif
 
@@ -75,14 +101,14 @@ _bootstrap:
 
 scan:
 ifeq ($(HOST_OS),Windows)
-	@$(SCAN_SCRIPT) "$(SRC_ROOT)"
+	@$(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
 else
-	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)"
+	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
 endif
 	@echo "[INFO] Scan complete."
 
 help:
-	@$(MAKE) --no-print-directory -f make/common.mk _help_text
+	@$(MAKE) --no-print-directory -f $(TEMPLATE_DIR)make/common.mk _help_text
 
 else
 # ── Normal build path (Makefile.mk files exist) ───────────────────────────────
@@ -116,9 +142,9 @@ VHDL_SRCS := $(foreach d,$(VHDL_SRCS_DIR),$(call _vhdl_dir_srcs,$(strip $d)))
 endif
 
 # Toolchain rules (defines recipe for the primary build target)
-include make/$(TOOLCHAIN).mk
+include $(TEMPLATE_DIR)make/$(TOOLCHAIN).mk
 
 # Common utility targets (scan, clean, distclean, help, info)
-include make/common.mk
+include $(TEMPLATE_DIR)make/common.mk
 
 endif

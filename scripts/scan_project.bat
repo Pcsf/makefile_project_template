@@ -2,7 +2,11 @@
 REM ==============================================================================
 REM scan_project.bat — Scan project tree and generate Makefile.mk files (Windows)
 REM
-REM Usage:  scripts\scan_project.bat [root_dir]
+REM Usage:  scripts\scan_project.bat [root_dir] [extra_exclude]
+REM
+REM extra_exclude: additional directory (relative to root_dir) to skip — the
+REM root Makefile passes the template's own directory when the template is
+REM embedded in a consuming project (e.g. as a git submodule).
 REM
 REM For each directory with recognised source files the script:
 REM   1. Creates/updates Makefile.mk  (VHDL_SRCS uses .compile_order if present)
@@ -15,6 +19,8 @@ setlocal enabledelayedexpansion
 
 set "ROOT=%~1"
 if "!ROOT!"=="" set "ROOT=."
+set "EXTRA_EXCLUDE=%~2"
+if not "!EXTRA_EXCLUDE!"=="" set "EXTRA_EXCLUDE=!EXTRA_EXCLUDE:/=\!"
 
 set MK_CREATED=0
 set MK_UPDATED=0
@@ -33,6 +39,11 @@ for /R "!ROOT!" %%D in (.) do (
 
     echo !DIR! | findstr /I /C:"\.git" /C:"\build" /C:"\make" /C:"\templates" /C:"\scripts" /C:"__pycache__" /C:"node_modules" >NUL 2>&1
     if not errorlevel 1 set "SKIP=1"
+
+    if not "!EXTRA_EXCLUDE!"=="" (
+        echo !DIR! | findstr /I /C:"\!EXTRA_EXCLUDE!\" >NUL 2>&1
+        if not errorlevel 1 set "SKIP=1"
+    )
 
     if "!SKIP!"=="0" (
         if exist "%%D\*.c"    set HAS_SOURCES=1
