@@ -91,7 +91,7 @@ endif
 ifeq ($(SUBMAKEFILES),)
 
 .DEFAULT_GOAL := _bootstrap
-.PHONY: _bootstrap scan help
+.PHONY: _bootstrap
 
 _bootstrap:
 	@echo "[INFO] No Makefile.mk found — running initial project scan..."
@@ -99,16 +99,9 @@ _bootstrap:
 	@echo "[INFO] Scan complete. Starting build..."
 	@$(MAKE) --no-print-directory all
 
-scan:
-ifeq ($(HOST_OS),Windows)
-	@$(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
-else
-	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
-endif
-	@echo "[INFO] Scan complete."
-
-help:
-	@$(MAKE) --no-print-directory -f $(TEMPLATE_DIR)make/common.mk _help_text
+# Utility targets (scan, clean, distclean, info, help) must work before the
+# first scan too; only 'all' needs the generated Makefile.mk files to exist.
+include $(TEMPLATE_DIR)make/common.mk
 
 else
 # ── Normal build path (Makefile.mk files exist) ───────────────────────────────
