@@ -51,8 +51,13 @@ CXX_SRCS  += $(wildcard $(_THIS_DIR)*.cpp $(_THIS_DIR)*.cxx $(_THIS_DIR)*.cc)
 # silent pre-pass to auto-resolve simple out-of-order cases.
 ifneq ($(wildcard $(_THIS_DIR).compile_order),)
 # .compile_order found — use explicit order (strips # comments and blank lines)
+# Literal '#' routed through _HASH: a bare '#' inside a function call is a
+# comment start on make < 4.3 ("unterminated call to function"), while '\#'
+# leaks the backslash into the shell on make >= 4.3.  Escaping in a plain
+# variable assignment works on every version (same idiom as the root Makefile).
+_HASH := \#
 VHDL_SRCS += $(addprefix $(_THIS_DIR),\
-    $(shell grep -v '^[[:space:]]*#' '$(_THIS_DIR).compile_order' \
+    $(shell grep -v '^[[:space:]]*$(_HASH)' '$(_THIS_DIR).compile_order' \
             | grep -v '^[[:space:]]*$$'))
 else
 # No .compile_order — alphabetical fallback (run 'make scan' to create one)
