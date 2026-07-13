@@ -93,8 +93,9 @@ powershell -NoProfile -Command ^
     "CXX_SRCS  += $(wildcard $(_THIS_DIR)*.cpp $(_THIS_DIR)*.cxx $(_THIS_DIR)*.cc)" & ^
     "" & ^
     "ifneq ($(wildcard $(_THIS_DIR).compile_order),)" & ^
+    "_HASH := \#" & ^
     "VHDL_SRCS += $(addprefix $(_THIS_DIR),\" & ^
-    "    $(shell grep -v '^[[:space:]]*#' '$(_THIS_DIR).compile_order' \" & ^
+    "    $(shell grep -v '^[[:space:]]*$(_HASH)' '$(_THIS_DIR).compile_order' \" & ^
     "            | grep -v '^[[:space:]]*$$'))" & ^
     "else" & ^
     "VHDL_SRCS += $(wildcard $(_THIS_DIR)*.vhd $(_THIS_DIR)*.vhdl)" & ^
