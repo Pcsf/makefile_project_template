@@ -176,15 +176,44 @@ bitstream: impl
 	@echo "[VIVADO] Bitstream ready: $(VIVADO_BIT)"
 
 # ── Program device (optional) ─────────────────────────────────────────────────
-program:
+# Optional overrides:
+#   VIVADO_HW_SERVER  hw_server URL, e.g. localhost:3121. Empty = local server.
+#   VIVADO_HW_TARGET  target pattern when several cables are attached.
+#   VIVADO_HW_DEVICE  device pattern. Empty picks the first PROGRAMMABLE device
+#                     — see the arm_dap note below, which is why this is not
+#                     simply "the first device in the chain".
+VIVADO_PROG_TCL  := $(BUILD_DIR)/vivado_program.tcl
+VIVADO_HW_SERVER ?=
+VIVADO_HW_TARGET ?=
+VIVADO_HW_DEVICE ?=
+
+program: | $(BUILD_DIR)
+	@test -f "$(VIVADO_BIT)" || { \
+	    echo "[VIVADO] ERROR: no bitstream at $(VIVADO_BIT)"; \
+	    echo "[VIVADO] Run 'make bitstream' first."; \
+	    exit 1; \
+	}
+	@echo "[VIVADO] Generating program script → $(VIVADO_PROG_TCL)"
+	@( \
+	echo "open_hw_manager"; \
+	echo "connect_hw_server$(if $(strip $(VIVADO_HW_SERVER)), -url $(VIVADO_HW_SERVER),)"; \
+	echo "open_hw_target$(if $(strip $(VIVADO_HW_TARGET)), {$(VIVADO_HW_TARGET)},)"; \
+	$(if $(strip $(VIVADO_HW_DEVICE)),\
+	    echo "set dev [lindex [get_hw_devices $(VIVADO_HW_DEVICE)] 0]";,\
+	    echo "set dev {}"; \
+	    echo "foreach d [get_hw_devices] {"; \
+	    echo "    if {![string match {arm_dap*} \$$d]} { set dev \$$d ; break }"; \
+	    echo "}";) \
+	echo "if {\$$dev eq {}} { puts \"ERROR: no programmable device in the JTAG chain\" ; exit 1 }"; \
+	echo "puts \"VIVADO: target device \$$dev\""; \
+	echo "current_hw_device \$$dev"; \
+	echo "refresh_hw_device -update_hw_probes false \$$dev"; \
+	echo "set_property PROGRAM.FILE {$(abspath $(VIVADO_BIT))} \$$dev"; \
+	echo "program_hw_devices \$$dev"; \
+	echo "refresh_hw_device \$$dev"; \
+	echo "close_hw_manager"; \
+	) > $(VIVADO_PROG_TCL)
 	@echo "[VIVADO] Programming device..."
-	$(VIVADO) $(VIVADO_FLAGS) -source - <<'TCL'
-	open_hw_manager
-	connect_hw_server
-	open_hw_target
-	set_property PROGRAM.FILE {$(VIVADO_BIT)} [current_hw_device]
-	program_hw_devices [current_hw_device]
-	close_hw_manager
-	TCL
+	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_PROG_TCL)
 
 $(BUILD_DIR)/$(PROJECT_NAME): bitstream
