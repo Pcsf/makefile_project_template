@@ -145,6 +145,8 @@ tcl: | $(BUILD_DIR)
 	    echo "read_xdc {$(f)}";) \
 	$(foreach ip,$(VIVADO_IP),\
 	    echo "create_ip -vlnv $(VIVADO_IP_$(ip)_VLNV) -module_name $(ip)"; \
+	    $(if $(strip $(VIVADO_IP_$(ip)_PRESET)),\
+	        echo "set_property -dict [list $(call _vivado_preset_dict,$(ip))] [get_ips $(ip)]";) \
 	    $(if $(strip $(VIVADO_IP_$(ip)_CONFIG)),\
 	        echo "set_property -dict [list $(subst =, ,$(VIVADO_IP_$(ip)_CONFIG))] [get_ips $(ip)]";) \
 	    echo "set_property generate_synth_checkpoint false [get_files $(ip).xci]"; \
@@ -154,6 +156,22 @@ tcl: | $(BUILD_DIR)
 	    echo "set_property generic {$(VIVADO_GENERICS)} [current_fileset]";) \
 	echo "update_compile_order -fileset sources_1"; \
 	) > $(VIVADO_TCL)
+
+# ── Board presets for create_ip IP ────────────────────────────────────────────
+# VIVADO_IP_<ip>_PRESET names a board preset XML. Its parameters for this IP are
+# expanded into the generated Tcl BEFORE VIVADO_IP_<ip>_CONFIG, so a project can
+# take the vendor's whole preset and still override individual values.
+#
+# This exists because Vivado's own CONFIG.PCW_IMPORT_BOARD_PRESET does nothing on
+# an IP made with create_ip outside IP Integrator — it is accepted silently and
+# applies no parameters (probed on 2021.2; see preset_to_config.sh).
+#
+# The IP name handed to the script comes from the VLNV's third field, since a
+# preset file carries one preset per IP and the right block must be selected.
+_vivado_preset_ipname = $(word 3,$(subst :, ,$(VIVADO_IP_$(1)_VLNV)))
+_vivado_preset_dict   = $(if $(strip $(PRESET_SCRIPT)),\
+    $(shell $(PRESET_SCRIPT) $(VIVADO_IP_$(1)_PRESET) $(call _vivado_preset_ipname,$(1))),\
+    $(error VIVADO_IP_$(1)_PRESET is set but no preset script exists for $(HOST_OS)))
 
 # ── Run-command blocks appended to the generated script ───────────────────────
 # Kept as variables so 'impl' can emit synthesis AND implementation into ONE
