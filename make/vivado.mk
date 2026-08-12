@@ -97,7 +97,7 @@ XELAB_FLAGS    ?= -debug typical
 XSIM_DIR       := $(BUILD_DIR)/xsim
 XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
 
-.PHONY: all tcl synth impl bitstream xsa program sim sim-gui sim-elab
+.PHONY: all tcl synth impl bitstream xsa program sim sim-gui sim-elab vitis-platform vitis-apps vitis-run
 
 all: bitstream
 
@@ -276,6 +276,102 @@ xsa: tcl
 	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
 	@test -f "$(VIVADO_XSA)" || { echo "[VIVADO] ERROR: no XSA at $(VIVADO_XSA)"; exit 1; }
 	@echo "[VIVADO] Hardware platform ready: $(VIVADO_XSA)"
+	@ps7=$$(find $(VIVADO_PROJDIR) -name ps7_init.tcl 2>/dev/null | head -1); \
+	if [ -n "$$ps7" ]; then \
+	    cp "$$ps7" $(VITIS_PS_INIT); \
+	    echo "[VIVADO] PS init script: $(VITIS_PS_INIT)"; \
+	fi
+
+# ── Vitis: bare-metal software on the exported platform ───────────────────────
+# Consumes VIVADO_XSA. Three targets, deliberately separate because the first is
+# slow and rarely changes while the third runs constantly:
+#   vitis-platform  create + generate the hardware platform (and its BSP)
+#   vitis-apps      create/import/build each app in VITIS_APPS
+#   vitis-run       reset, init the PS, load the bitstream, download and run
+#
+# XSCT is not on PATH under Vivado's settings64.sh; point at it explicitly:
+#   XSCT := /tools/Xilinx/Vitis/2021.2/bin/xsct
+XSCT           ?= xsct
+VITIS_WS       ?= $(BUILD_DIR)/vitis_ws
+VITIS_PLATFORM ?= $(VIVADO_TOP)_plat
+VITIS_PROC     ?= ps7_cortexa9_0
+VITIS_OS       ?= standalone
+VITIS_DOMAIN   ?= standalone_domain
+# App names; each needs VITIS_APP_<name>_SRC pointing at its sources.
+VITIS_APPS     ?=
+VITIS_RUN_APP  ?= $(firstword $(VITIS_APPS))
+
+VITIS_PLATFORM_TCL := $(BUILD_DIR)/vitis_platform.tcl
+VITIS_APPS_TCL     := $(BUILD_DIR)/vitis_apps.tcl
+VITIS_RUN_TCL      := $(BUILD_DIR)/vitis_run.tcl
+# Taken from the XSA rather than the IP tree: the in-project path moves whenever
+# the design is restructured, the archive's layout does not.
+VITIS_PS_INIT      := $(BUILD_DIR)/ps7_init.tcl
+
+vitis-platform: | $(BUILD_DIR)
+	@test -f "$(VIVADO_XSA)" || { \
+	    echo "[VITIS] ERROR: no hardware platform at $(VIVADO_XSA)"; \
+	    echo "[VITIS] Run 'make xsa' first."; \
+	    exit 1; \
+	}
+	@echo "[VITIS] Generating platform script → $(VITIS_PLATFORM_TCL)"
+	@( \
+	echo "setws $(abspath $(VITIS_WS))"; \
+	echo "platform create -name $(VITIS_PLATFORM) -hw $(abspath $(VIVADO_XSA)) -proc $(VITIS_PROC) -os $(VITIS_OS)"; \
+	echo "platform generate"; \
+	) > $(VITIS_PLATFORM_TCL)
+	@echo "[VITIS] Building platform $(VITIS_PLATFORM)..."
+	$(XSCT) $(VITIS_PLATFORM_TCL)
+
+vitis-apps: | $(BUILD_DIR)
+	@test -n "$(strip $(VITIS_APPS))" || { echo "[VITIS] ERROR: VITIS_APPS is empty"; exit 1; }
+	@echo "[VITIS] Generating app script → $(VITIS_APPS_TCL)"
+	@( \
+	echo "setws $(abspath $(VITIS_WS))"; \
+	$(foreach a,$(VITIS_APPS),\
+	    echo "catch { app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {Empty Application(C)} }"; \
+	    echo "importsources -name $(a) -path $(abspath $(VITIS_APP_$(a)_SRC))"; \
+	    echo "app build -name $(a)";) \
+	) > $(VITIS_APPS_TCL)
+	@echo "[VITIS] Building app(s): $(VITIS_APPS)"
+	$(XSCT) $(VITIS_APPS_TCL)
+
+# The rules encoded below were each learned by breaking them:
+#   'rst -system' on the APU, then halt core 0 — a plain 'stop' leaves the MMU
+#     enabled with the running app's translation table and 'dow' faults with
+#     "MMU page translation fault"; 'rst -processor' alone is not enough either,
+#     since the second core keeps running and the DAP can wedge into
+#     "AHB AP transaction error"
+#   ps7_init before loading the PL — FCLK comes from the PS PLLs
+#   the bitstream goes in after ps7_post_config, not before
+#   end with 'con' — a halted A9 eventually wedges the DAP into
+#     "AHB AP transaction error", recoverable only by replugging the cable
+vitis-run: | $(BUILD_DIR)
+	@test -f "$(VIVADO_BIT)" || { echo "[VITIS] ERROR: no bitstream at $(VIVADO_BIT)"; exit 1; }
+	@test -n "$(strip $(VITIS_RUN_APP))" || { echo "[VITIS] ERROR: VITIS_RUN_APP is empty"; exit 1; }
+	@test -f "$(VITIS_PS_INIT)" || { \
+	    echo "[VITIS] ERROR: no PS init script at $(VITIS_PS_INIT)"; \
+	    echo "[VITIS] 'make xsa' copies it out of the project tree."; \
+	    exit 1; \
+	}
+	@echo "[VITIS] Generating run script → $(VITIS_RUN_TCL)"
+	@( \
+	echo "connect"; \
+	echo "after 3000"; \
+	echo 'targets -set -filter {name =~ "*Cortex-A9*#1"}'; \
+	echo "stop"; \
+	echo 'targets -set -filter {name =~ "*Cortex-A9*#0"}'; \
+	echo "rst -processor"; \
+	echo "after 1000"; \
+	echo "source $(abspath $(VITIS_PS_INIT))"; \
+	echo "ps7_init"; \
+	echo "ps7_post_config"; \
+	echo "fpga -file $(abspath $(VIVADO_BIT))"; \
+	echo "dow $(abspath $(VITIS_WS))/$(VITIS_RUN_APP)/Debug/$(VITIS_RUN_APP).elf"; \
+	echo "con"; \
+	) > $(VITIS_RUN_TCL)
+	@echo "[VITIS] Running $(VITIS_RUN_APP) on hardware..."
+	$(XSCT) $(VITIS_RUN_TCL)
 
 # ── Program device (optional) ─────────────────────────────────────────────────
 # Optional overrides:
