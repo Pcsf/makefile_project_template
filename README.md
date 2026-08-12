@@ -199,6 +199,7 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make synth` | `vivado`, `quartus` | Synthesis only |
 | `make impl` | `vivado` | Implementation (place & route) |
 | `make bitstream` | `vivado` | Full flow to bitstream |
+| `make xsa` | `vivado` | Full flow, then export the hardware platform (`.xsa`) |
 | `make fit` | `quartus` | Fitter (place & route) |
 | `make asm` | `quartus` | Assembler — generate .sof |
 | `make sta` | `quartus` | Static timing analysis (full flow) |
@@ -330,6 +331,115 @@ VIVADO_XDC  := constraints/pins.xdc
 QUARTUS_PART   := EP4CE6E22C8
 QUARTUS_FAMILY := "Cyclone IV E"
 QUARTUS_TOP    := top
+```
+
+---
+
+## Vivado block designs
+
+A block design is an **output** of the build, not an input to it. Every build
+runs `create_project -force`, so the project and any block design in it are
+rebuilt from scratch from `project.mk`. Nothing you draw in the GUI survives the
+next `make`. That is the property that makes a fresh clone reproduce the design;
+treat the generated project as disposable.
+
+### Declaring one
+
+```make
+# project.mk
+VIVADO_BD           := ps_bd                       # block design name
+VIVADO_BD_CELLS     := ps7_0                       # cells inside it
+VIVADO_BD_EXT_INTF  := ps7_0/DDR ps7_0/FIXED_IO ps7_0/M_AXI_GP0
+VIVADO_BD_EXT_PINS  := ps7_0/FCLK_CLK0 ps7_0/FCLK_RESET0_N
+VIVADO_BD_NETS      := ps7_0/M_AXI_GP0_ACLK=ps7_0/FCLK_CLK0
+VIVADO_BD_INTF_FREQ := M_AXI_GP0_0=125000000
+
+# Cells reuse the same variables as create_ip IP:
+VIVADO_IP_ps7_0_VLNV   := xilinx.com:ip:processing_system7:5.5
+VIVADO_IP_ps7_0_PRESET := vivado/board_files/arty-z7-20/A.0/preset.xml
+VIVADO_IP_ps7_0_CONFIG := CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ=125
+```
+
+The generated wrapper is added to `sources_1`. **Instantiate it from your own
+top** rather than making it the top, so the block design stays as small as
+whatever forced you to have one, and the rest of the fabric stays in RTL where
+it is reviewable and diffable.
+
+`VIVADO_BD_INTF_FREQ` is not decoration: external interface ports do not inherit
+the clock rate of the pin they were made from, so overriding an FCLK makes
+`validate_bd_design` fail with a `FREQ_HZ` mismatch between the port and the
+interface.
+
+### What it can and cannot express
+
+| Can | Cannot |
+|---|---|
+| Create cells of any VLNV | Connect interfaces between cells (`connect_bd_intf_net`) |
+| Configure them (`_PRESET`, `_CONFIG`) | Assign addresses (`assign_bd_address`) |
+| Expose interface pins externally | `apply_bd_automation` |
+| Expose scalar pins externally | Hierarchies / nested blocks |
+| Connect scalar pins | Ordering beyond this fixed sequence |
+| Set external interface `FREQ_HZ` | |
+
+This covers "a processor with its pins brought out", which is usually all a
+hardware-platform export needs. Anything richer means extending
+`make/vivado.mk`. To see exactly what gets emitted, run `make tcl` and read
+`build/vivado_build.tcl` — that file is the whole truth.
+
+### Prototyping in the GUI, then porting back
+
+The GUI is for figuring out *what* you want, never for storing it. Open the
+generated project — it already has the board repo, board part and configured IP:
+
+```sh
+vivado build/vivado_proj/<project>.xpr
+```
+
+In the Tcl console, snapshot before and after your edit:
+
+```tcl
+write_bd_tcl -force /tmp/bd_before.tcl
+# ... make the change in the GUI ...
+write_bd_tcl -force /tmp/bd_after.tcl
+```
+
+`diff /tmp/bd_before.tcl /tmp/bd_after.tcl` isolates exactly the Tcl your edit
+added — usually a few lines, since `write_bd_tcl` re-emits every cell's full
+config dict each time. Port that diff into `project.mk` variables, extending
+`make/vivado.mk` if the construct is not expressible yet, then rebuild with
+`make` and discard the GUI session.
+
+Harvest the diff as you go. An hour of GUI work is an hour lost the moment
+someone runs `make`.
+
+---
+
+## Hardware platform export (XSA)
+
+```sh
+make xsa                       # -> $(VIVADO_XSA), default build/$(VIVADO_TOP).xsa
+```
+
+Runs synthesis, implementation and `write_hw_platform -fixed -include_bit` in a
+**single** Vivado invocation — necessary because the generated script opens with
+`create_project -force`, so a second invocation would rebuild the project rather
+than find the implemented results.
+
+**An XSA is only useful to Vitis if the design contains a block design.**
+`write_hw_platform` derives its `.hwh` hardware handoff from one. Export from a
+pure-RTL design and you get an archive holding just a bitstream — no address
+map, no `ps7_init`, nothing to build a bare-metal platform or an FSBL from. That
+is the usual reason to introduce a block design at all, even a single-cell one.
+
+Judge an export by its `sysdef.xml`, not `xsa.xml`. The latter is the
+acceleration-flow manifest and can still report `PlatformState="pre_synth"` for
+a perfectly good embedded platform. A complete embedded export lists:
+
+```
+HW_HANDOFF     <bd>.hwh
+PS_FSBL_INIT   ps7_init.c / ps7_init.h
+PS_XMD_INIT    ps7_init.tcl
+BIT            <top>.bit
 ```
 
 ---
