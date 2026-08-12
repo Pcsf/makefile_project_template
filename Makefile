@@ -43,6 +43,8 @@ endif
 ifeq ($(OS),Windows_NT)
     HOST_OS     := Windows
     SCAN_SCRIPT := $(subst /,\,$(TEMPLATE_DIR))scripts\scan_project.bat
+    # No .bat port of preset_to_config yet; vivado.mk errors if a preset is asked for.
+    PRESET_SCRIPT :=
     RMDIR       := cmd /C rmdir /Q /S
     MKDIR       := cmd /C mkdir
     NULL        := NUL
@@ -50,6 +52,7 @@ ifeq ($(OS),Windows_NT)
 else
     HOST_OS     := $(shell uname -s)
     SCAN_SCRIPT := $(TEMPLATE_DIR)scripts/scan_project.sh
+    PRESET_SCRIPT := $(TEMPLATE_DIR)scripts/preset_to_config.sh
     RMDIR       := rm -rf
     MKDIR       := mkdir -p
     NULL        := /dev/null
