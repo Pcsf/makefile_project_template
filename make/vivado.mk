@@ -25,6 +25,9 @@
 VIVADO_PROJDIR := $(BUILD_DIR)/vivado_proj
 VIVADO_TCL     := $(BUILD_DIR)/vivado_build.tcl
 VIVADO_BIT     := $(VIVADO_PROJDIR)/$(PROJECT_NAME).runs/impl_1/$(VIVADO_TOP).bit
+# Hardware platform handed to Vitis. Overridable so a project can publish it
+# somewhere its software build expects.
+VIVADO_XSA     ?= $(BUILD_DIR)/$(VIVADO_TOP).xsa
 VIVADO_FLAGS   := -mode batch -nojournal -nolog -quiet
 
 # ── Board files (optional) ────────────────────────────────────────────────────
@@ -94,7 +97,7 @@ XELAB_FLAGS    ?= -debug typical
 XSIM_DIR       := $(BUILD_DIR)/xsim
 XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
 
-.PHONY: all tcl synth impl bitstream program sim sim-gui sim-elab
+.PHONY: all tcl synth impl bitstream xsa program sim sim-gui sim-elab
 
 all: bitstream
 
@@ -131,6 +134,25 @@ tcl: | $(BUILD_DIR)
 	$(if $(strip $(VIVADO_BOARD_PART)),\
 	    echo "set_property board_part $(VIVADO_BOARD_PART) [current_project]";) \
 	echo "set_property target_language VHDL [current_project]"; \
+	$(if $(strip $(VIVADO_BD)),\
+	    echo "create_bd_design $(VIVADO_BD)"; \
+	    $(foreach c,$(VIVADO_BD_CELLS),\
+	        echo "create_bd_cell -type ip -vlnv $(VIVADO_IP_$(c)_VLNV) $(c)"; \
+	        $(if $(strip $(VIVADO_IP_$(c)_PRESET)),\
+	            echo "set_property -dict [list $(call _vivado_preset_dict,$(c))] [get_bd_cells $(c)]";) \
+	        $(if $(strip $(VIVADO_IP_$(c)_CONFIG)),\
+	            echo "set_property -dict [list $(subst =, ,$(VIVADO_IP_$(c)_CONFIG))] [get_bd_cells $(c)]";)) \
+	    $(foreach i,$(VIVADO_BD_EXT_INTF),\
+	        echo "make_bd_intf_pins_external [get_bd_intf_pins $(i)]";) \
+	    $(foreach p,$(VIVADO_BD_EXT_PINS),\
+	        echo "make_bd_pins_external [get_bd_pins $(p)]";) \
+	    $(foreach n,$(VIVADO_BD_NETS),\
+	        echo "connect_bd_net [get_bd_pins $(word 1,$(subst =, ,$(n)))] [get_bd_pins $(word 2,$(subst =, ,$(n)))]";) \
+	    $(foreach f,$(VIVADO_BD_INTF_FREQ),\
+	        echo "set_property CONFIG.FREQ_HZ $(word 2,$(subst =, ,$(f))) [get_bd_intf_ports $(word 1,$(subst =, ,$(f)))]";) \
+	    echo "validate_bd_design"; \
+	    echo "save_bd_design"; \
+	    echo "add_files -norecurse [make_wrapper -files [get_files $(VIVADO_BD).bd] -top -force]";) \
 	$(foreach f,$(_vivado_synth_vhdl),\
 	    echo "read_vhdl -library xil_defaultlib {$(f)}"; \
 	    echo "set_property file_type {$(call _vivado_ftype,$(f))} [get_files {$(f)}]";) \
@@ -156,6 +178,38 @@ tcl: | $(BUILD_DIR)
 	    echo "set_property generic {$(VIVADO_GENERICS)} [current_fileset]";) \
 	echo "update_compile_order -fileset sources_1"; \
 	) > $(VIVADO_TCL)
+
+# ── Block design (optional) ───────────────────────────────────────────────────
+# VIVADO_BD names a block design to build before the RTL sources are read. It
+# exists for one reason: write_hw_platform derives its hardware handoff (.hwh)
+# from a block design, so a pure-RTL design exports an XSA carrying only a
+# bitstream — no address map, no ps7_init, nothing Vitis can build a bare-metal
+# platform or an FSBL from. Verified on 2021.2: the RTL-only export listed
+# FULL_BIT alone and reported PlatformState="pre_synth".
+#
+# Keep the block design as small as the handoff requires — typically the
+# processor alone — and leave the rest of the fabric in RTL, where it stays
+# reviewable and needs no IP Integrator module references.
+#
+#   VIVADO_BD          block design name
+#   VIVADO_BD_CELLS    cells inside it; each reuses VIVADO_IP_<cell>_VLNV,
+#                      _PRESET and _CONFIG, exactly like a create_ip IP
+#   VIVADO_BD_EXT_INTF interface pins to expose, e.g. ps7_0/M_AXI_GP0
+#   VIVADO_BD_EXT_PINS scalar pins to expose, e.g. ps7_0/FCLK_CLK0
+#   VIVADO_BD_NETS     internal connections as a=b pin pairs
+#   VIVADO_BD_INTF_FREQ  external interface port clock rates, as port=hz
+#
+# The generated wrapper is added to the sources fileset; instantiate it from
+# your own top rather than making it the top, so the fabric stays in RTL.
+VIVADO_BD          ?=
+VIVADO_BD_CELLS    ?=
+VIVADO_BD_EXT_INTF ?=
+VIVADO_BD_EXT_PINS ?=
+VIVADO_BD_NETS     ?=
+# External interface ports do not inherit the clock frequency of the pin they
+# were made from, so an overridden FCLK makes validate_bd_design fail with a
+# FREQ_HZ mismatch. Pairs of port=hz.
+VIVADO_BD_INTF_FREQ ?=
 
 # ── Board presets for create_ip IP ────────────────────────────────────────────
 # VIVADO_IP_<ip>_PRESET names a board preset XML. Its parameters for this IP are
@@ -190,6 +244,12 @@ _vivado_preset_dict   = $(if $(strip $(PRESET_SCRIPT)),\
 # Use 'make impl' or 'make bitstream' — both already include synthesis.
 _vivado_synth_cmds = echo "launch_runs synth_1 -jobs 4"; echo "wait_on_run synth_1"; echo "if {[get_property PROGRESS [get_runs synth_1]] ne {100%}} {exit 1}";
 _vivado_impl_cmds  = echo "launch_runs impl_1 -to_step write_bitstream -jobs 4"; echo "wait_on_run impl_1"; echo "if {[get_property PROGRESS [get_runs impl_1]] ne {100%}} {exit 1}";
+# The XSA must be written from the same session that ran implementation: the
+# generated script opens with create_project -force, so a second invocation
+# would rebuild the project from scratch rather than find the results.
+# -fixed marks a non-reconfigurable platform; -include_bit embeds the bitstream
+# so Vitis can program the PL from the platform alone.
+_vivado_xsa_cmds   = echo "open_run impl_1"; echo "write_hw_platform -fixed -include_bit -force {$(abspath $(VIVADO_XSA))}";
 
 # ── Synthesis ─────────────────────────────────────────────────────────────────
 synth: tcl
@@ -206,6 +266,16 @@ impl: tcl
 # ── Bitstream ─────────────────────────────────────────────────────────────────
 bitstream: impl
 	@echo "[VIVADO] Bitstream ready: $(VIVADO_BIT)"
+
+# ── Hardware platform export (XSA) ────────────────────────────────────────────
+# Synthesis, implementation and the export all happen in ONE vivado invocation,
+# for the same reason 'impl' does not depend on 'synth' — see the note above.
+xsa: tcl
+	@echo "[VIVADO] Building and exporting hardware platform..."
+	@( $(_vivado_synth_cmds) $(_vivado_impl_cmds) $(_vivado_xsa_cmds) ) >> $(VIVADO_TCL)
+	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
+	@test -f "$(VIVADO_XSA)" || { echo "[VIVADO] ERROR: no XSA at $(VIVADO_XSA)"; exit 1; }
+	@echo "[VIVADO] Hardware platform ready: $(VIVADO_XSA)"
 
 # ── Program device (optional) ─────────────────────────────────────────────────
 # Optional overrides:
