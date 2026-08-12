@@ -155,20 +155,34 @@ tcl: | $(BUILD_DIR)
 	echo "update_compile_order -fileset sources_1"; \
 	) > $(VIVADO_TCL)
 
+# ── Run-command blocks appended to the generated script ───────────────────────
+# Kept as variables so 'impl' can emit synthesis AND implementation into ONE
+# script and invoke vivado ONCE.
+#
+# 'impl' deliberately depends on 'tcl', not on 'synth'. It used to depend on
+# 'synth', which ran vivado to completion, after which impl appended to the SAME
+# script and re-sourced it — and that script starts with 'create_project -force',
+# so the second run destroyed the first project, re-read every source, and
+# synthesized all over again. Every 'make bitstream' therefore synthesized twice
+# and discarded the first result (measured 2026-08-12: two 'synth_design
+# completed successfully' lines, ~24 s each, in one bitstream build).
+#
+# Caveat: naming both on one command line ('make synth impl') appends the synth
+# block twice, since 'tcl' is phony and regenerates only once per invocation.
+# Use 'make impl' or 'make bitstream' — both already include synthesis.
+_vivado_synth_cmds = echo "launch_runs synth_1 -jobs 4"; echo "wait_on_run synth_1"; echo "if {[get_property PROGRESS [get_runs synth_1]] ne {100%}} {exit 1}";
+_vivado_impl_cmds  = echo "launch_runs impl_1 -to_step write_bitstream -jobs 4"; echo "wait_on_run impl_1"; echo "if {[get_property PROGRESS [get_runs impl_1]] ne {100%}} {exit 1}";
+
 # ── Synthesis ─────────────────────────────────────────────────────────────────
 synth: tcl
 	@echo "[VIVADO] Running synthesis..."
-	@echo "launch_runs synth_1 -jobs 4" >> $(VIVADO_TCL)
-	@echo "wait_on_run synth_1"         >> $(VIVADO_TCL)
-	@echo "if {[get_property PROGRESS [get_runs synth_1]] ne {100%}} {exit 1}" >> $(VIVADO_TCL)
+	@( $(_vivado_synth_cmds) ) >> $(VIVADO_TCL)
 	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
 
-# ── Implementation ────────────────────────────────────────────────────────────
-impl: synth
-	@echo "[VIVADO] Running implementation..."
-	@echo "launch_runs impl_1 -to_step write_bitstream -jobs 4" >> $(VIVADO_TCL)
-	@echo "wait_on_run impl_1" >> $(VIVADO_TCL)
-	@echo "if {[get_property PROGRESS [get_runs impl_1]] ne {100%}} {exit 1}" >> $(VIVADO_TCL)
+# ── Implementation (includes synthesis, one vivado invocation) ────────────────
+impl: tcl
+	@echo "[VIVADO] Running synthesis + implementation..."
+	@( $(_vivado_synth_cmds) $(_vivado_impl_cmds) ) >> $(VIVADO_TCL)
 	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
 
 # ── Bitstream ─────────────────────────────────────────────────────────────────
