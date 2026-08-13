@@ -21,6 +21,11 @@ removed within an existing directory.
 | `vivado` | VHDL, Verilog, SV + XDC | Xilinx Vivado |
 | `quartus` | VHDL, Verilog, SV | Intel/Altera Quartus Prime |
 
+**Not covered yet: non-volatile programming.** The framework builds a design and
+loads it over JTAG; it writes nothing to flash, on either vendor. Scoped in
+[`TODO.md`](TODO.md), which covers the whole matrix — Xilinx and Intel, SoC and
+non-SoC — because the SoC case is not the non-SoC case with extra steps.
+
 ---
 
 ## Quick start
