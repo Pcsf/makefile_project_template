@@ -147,7 +147,11 @@ makefile_project_template/
 │   └── quartus.mk         ← Intel Quartus synthesis/fit/asm/STA rules
 ├── scripts/
 │   ├── scan_project.sh    ← Source-tree scanner (Linux / macOS / WSL)
-│   └── scan_project.bat   ← Source-tree scanner (native Windows cmd)
+│   ├── scan_project.bat   ← Source-tree scanner (native Windows cmd)
+│   ├── preset_to_config.sh ← Board preset XML → set_property CONFIG pairs
+│   ├── vivado_lib.tcl     ← Shared Vivado procedures (sources, IP, BD, ELF)
+│   ├── vivado_nonproject.tcl ← In-memory build engine (the build)
+│   └── vivado_project.tcl ← .xpr flows: inspection + block-design round trip
 ├── templates/
 │   └── Makefile.mk.tmpl   ← Reference copy of the generated fragment
 └── example/
@@ -200,10 +204,19 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make impl` | `vivado` | Implementation (place & route) |
 | `make bitstream` | `vivado` | Full flow to bitstream |
 | `make xsa` | `vivado` | Full flow, then export the hardware platform (`.xsa`) |
+| `make sim` / `sim-gui` | `vivado` | XSim behavioural simulation |
+| `make gui` | `vivado` | Open the newest checkpoint in the IDE (read) |
+| `make project` | `vivado` | Build a browsable `.xpr` from the same sources (read) |
+| `make project-gui` | `vivado` | Open that project in the IDE |
+| `make bd-draft` | `vivado` | Create the editable block-design project |
+| `make bd-export` | `vivado` | Write the block design back out as versioned Tcl |
 | `make fit` | `quartus` | Fitter (place & route) |
 | `make asm` | `quartus` | Assembler — generate .sof |
 | `make sta` | `quartus` | Static timing analysis (full flow) |
 | `make program` | `vivado`, `quartus` | Program connected device |
+
+`FORCE=1` is required by `project` and `bd-draft` to overwrite an existing
+project — recreating one discards every IDE edit that has not been exported.
 
 ---
 
@@ -327,6 +340,15 @@ VIVADO_PART := xc7a35tcpg236-1
 VIVADO_TOP  := top
 VIVADO_XDC  := constraints/pins.xdc
 
+# Implementation strategy — Default everywhere; escalate where timing bites.
+# Explore-class directives cost real time on every build, so they are opt-in.
+VIVADO_OPT_DIRECTIVE      := Default
+VIVADO_PLACE_DIRECTIVE    := Default
+VIVADO_ROUTE_DIRECTIVE    := Default
+VIVADO_PHYS_OPT_DIRECTIVE :=          # empty = skip phys_opt entirely
+VIVADO_PHYS_OPT_ON_WNS    := 0        # 1 = run it only when placement missed
+VIVADO_REPORTS            := 1        # utilization, timing, power, DRC, methodology
+
 # Quartus
 QUARTUS_PART   := EP4CE6E22C8
 QUARTUS_FAMILY := "Cyclone IV E"
@@ -335,19 +357,93 @@ QUARTUS_TOP    := top
 
 ---
 
+## Vivado build flow — Non-Project Mode
+
+The build is **Non-Project Mode**: sources are read, implemented and exported
+inside one in-memory Vivado session and no `.xpr` is written. Everything the
+build needs comes from `project.mk`, so a fresh clone reproduces the design
+exactly.
+
+The flow lives in three committed, reviewable Tcl files under `scripts/`:
+
+| File | Role |
+|---|---|
+| `vivado_lib.tcl` | shared procedures — sources, IP, block design, ELF |
+| `vivado_nonproject.tcl` | the in-memory build engine (`synth`→`impl`→`bitstream`→`xsa`) |
+| `vivado_project.tcl` | the `.xpr` flows: inspection and the block-design round trip |
+
+None of them contains project-specific data. Make generates exactly one file —
+`build/vivado_params.tcl`, a flat parameter array — and the engine sources it.
+Data is generated; flow is committed.
+
+Each stage is cumulative and runs in a single Vivado invocation, because an
+in-memory design does not outlive the process. Every stage leaves a checkpoint
+in `build/nonproject/`, so a failed run can be opened and inspected without
+rebuilding:
+
+```
+post_synth.dcp   post_place.dcp   post_route.dcp
+```
+
+Two things that are easy to get wrong here, both learned by hitting them:
+
+- **IP must be synthesized explicitly.** Project Mode gets this free — the run
+  manager spawns a child run per IP. Non-Project Mode has none, and
+  `synth_design` will not compile an IP from its `.xci`. Skip `synth_ip` and the
+  build dies at `opt_design` with `DRC INBB-3 … considered a black box`, long
+  after synthesis reported success. `vivado_lib.tcl` does this for every IP.
+
+- **Compilation order is the contract.** There is no `update_compile_order` to
+  fall back on, so the order from `.compile_order` / `VHDL_SRCS_DIR` is what
+  Vivado gets.
+
+### The project is for reading
+
+A `.xpr` is still available, but nothing is ever built from one:
+
+```sh
+make gui           # open the newest checkpoint — the usual way to inspect a build
+make project       # build a browsable .xpr from the same sources
+make project-gui   # open it
+```
+
+Nothing authored in the IDE survives, with exactly one sanctioned exception:
+the block design round trip below.
+
+---
+
 ## Vivado block designs
 
-A block design is an **output** of the build, not an input to it. Every build
-runs `create_project -force`, so the project and any block design in it are
-rebuilt from scratch from `project.mk`. Nothing you draw in the GUI survives the
-next `make`. That is the property that makes a fresh clone reproduce the design;
-treat the generated project as disposable.
+A block design is authored in the IDE and stored as **versioned Tcl**. The round
+trip is:
+
+```sh
+make bd-draft      # create the editable project, seeded from what exists
+                   # ... open it, wire it up, SAVE ...
+make bd-export     # write_bd_tcl -> $(VIVADO_BD_TCL)
+git add $(VIVADO_BD_TCL)
+```
+
+From then on `VIVADO_BD_TCL` is the source of truth: the build replays it and
+every `VIVADO_BD_*` key below is ignored. Those keys are a **bootstrap** — they
+seed the first draft so a processor-only handoff design works before anyone has
+opened the IDE, and they stop being read the moment an export exists.
+
+This matters because the export can express everything IP Integrator can —
+interface-to-interface connections, address assignment, `apply_bd_automation`,
+hierarchies — none of which the bootstrap keys can reach. The cost is that
+`write_bd_tcl` output is verbose (tens of KB), re-emits every cell's full config
+dict, and embeds a Vivado version check that errors on a mismatch.
 
 ### Declaring one
 
 ```make
 # project.mk
 VIVADO_BD           := ps_bd                       # block design name
+VIVADO_BD_TCL       := vivado/bd/ps_bd.tcl         # versioned export — canonical
+                                                   # once it exists
+
+# Bootstrap only — ignored as soon as VIVADO_BD_TCL exists on disk:
 VIVADO_BD_CELLS     := ps7_0                       # cells inside it
 VIVADO_BD_EXT_INTF  := ps7_0/DDR ps7_0/FIXED_IO ps7_0/M_AXI_GP0
 VIVADO_BD_EXT_PINS  := ps7_0/FCLK_CLK0 ps7_0/FCLK_RESET0_N
@@ -370,7 +466,7 @@ the clock rate of the pin they were made from, so overriding an FCLK makes
 `validate_bd_design` fail with a `FREQ_HZ` mismatch between the port and the
 interface.
 
-### What it can and cannot express
+### What the bootstrap keys can and cannot express
 
 | Can | Cannot |
 |---|---|
@@ -381,36 +477,34 @@ interface.
 | Connect scalar pins | Ordering beyond this fixed sequence |
 | Set external interface `FREQ_HZ` | |
 
-This covers "a processor with its pins brought out", which is usually all a
-hardware-platform export needs. Anything richer means extending
-`make/vivado.mk`. To see exactly what gets emitted, run `make tcl` and read
-`build/vivado_build.tcl` — that file is the whole truth.
+This covers "a processor with its pins brought out", which is all a
+hardware-platform export usually needs. **Anything richer is not a reason to
+extend `make/vivado.mk` — it is a reason to draft, edit and export.** The
+exported Tcl has none of these limits, which is the whole point of the round
+trip.
 
-### Prototyping in the GUI, then porting back
+To see exactly what make hands the flow, read `build/vivado_params.tcl`.
 
-The GUI is for figuring out *what* you want, never for storing it. Open the
-generated project — it already has the board repo, board part and configured IP:
+### Working in the IDE
 
 ```sh
-vivado build/vivado_proj/<project>.xpr
+make bd-draft                       # refuses to clobber; FORCE=1 to recreate
+make project-gui                    # open it
 ```
 
-In the Tcl console, snapshot before and after your edit:
+The draft is seeded from `VIVADO_BD_TCL` when that file exists, and from the
+bootstrap keys when it does not — so the loop is genuinely round-trippable:
+export, edit, re-export, and the diff is just your change.
+
+Edit, **save in the IDE**, then export. `bd-export` reads what is on disk; an
+unsaved edit is not in the project file and will not appear in the output.
+You can also export from the IDE's own Tcl console without leaving it:
 
 ```tcl
-write_bd_tcl -force /tmp/bd_before.tcl
-# ... make the change in the GUI ...
-write_bd_tcl -force /tmp/bd_after.tcl
+write_bd_tcl -force <VIVADO_BD_TCL>
 ```
 
-`diff /tmp/bd_before.tcl /tmp/bd_after.tcl` isolates exactly the Tcl your edit
-added — usually a few lines, since `write_bd_tcl` re-emits every cell's full
-config dict each time. Port that diff into `project.mk` variables, extending
-`make/vivado.mk` if the construct is not expressible yet, then rebuild with
-`make` and discard the GUI session.
-
-Harvest the diff as you go. An hour of GUI work is an hour lost the moment
-someone runs `make`.
+`make bd-draft` prints that exact line, with the path filled in.
 
 ---
 
@@ -420,10 +514,25 @@ someone runs `make`.
 make xsa                       # -> $(VIVADO_XSA), default build/$(VIVADO_TOP).xsa
 ```
 
-Runs synthesis, implementation and `write_hw_platform -fixed -include_bit` in a
-**single** Vivado invocation — necessary because the generated script opens with
-`create_project -force`, so a second invocation would rebuild the project rather
-than find the implemented results.
+Runs synthesis, implementation, the bitstream and `write_hw_platform -fixed
+-include_bit` in a **single** Vivado invocation — an in-memory design does not
+outlive the process, so there is nothing for a second invocation to find.
+
+The export has one non-obvious step in it. `write_hw_platform` refuses to run
+against the in-memory routed design: with no implementation run to inspect,
+Vivado computes the platform state as `pre_synth` and fails with
+
+```
+ERROR: [Common 17-69] Platform state 'pre_synth' is only supported for
+synthesized, implemented, checkpoint or non-DFX elaborated designs
+```
+
+There is nothing to override — `PLATFORM.STATE` is not a property that exists.
+The fix is to reopen the routed checkpoint, which puts the design into the
+`checkpoint` state that message names. The block design survives that, because
+only the *design* is replaced and the in-memory *project* still holds the `.bd`.
+Verified on 2021.2: the resulting archive carries the `.hwh`, `ps7_init.*` and
+the bitstream.
 
 **An XSA is only useful to Vitis if the design contains a block design.**
 `write_hw_platform` derives its `.hwh` hardware handoff from one. Export from a
