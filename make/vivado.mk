@@ -379,6 +379,23 @@ VITIS_DOMAIN   ?= standalone_domain
 VITIS_APPS     ?=
 VITIS_RUN_APP  ?= $(firstword $(VITIS_APPS))
 
+# BSP libraries added to VITIS_DOMAIN before the platform is generated, e.g.
+# 'lwip211' for anything using the network stack. A library is part of the
+# platform, not of an app, so changing this list means regenerating the
+# platform -- see the guard in vitis-platform.
+VITIS_LIBS     ?=
+
+# BSP parameters applied to VITIS_DOMAIN before the platform is generated, as
+# name=value pairs, e.g. phy_link_speed=CONFIG_LINKSPEED1000. Applied after
+# VITIS_LIBS, since a library's parameters only exist once the library does.
+# Like VITIS_LIBS, these are platform state -- changing them means regenerating.
+VITIS_BSP_CONFIG ?=
+
+# Per-app Vitis template, e.g. VITIS_APP_echo_TEMPLATE := lwIP Echo Server.
+# Names are version-specific -- list them with 'repo -apps' in xsct. Likewise
+# 'repo -libs' for the VITIS_LIBS names above.
+VITIS_TEMPLATE ?= Empty Application(C)
+
 VITIS_PLATFORM_TCL := $(BUILD_DIR)/vitis_platform.tcl
 VITIS_APPS_TCL     := $(BUILD_DIR)/vitis_apps.tcl
 VITIS_RUN_TCL      := $(BUILD_DIR)/vitis_run.tcl
@@ -390,18 +407,34 @@ VITIS_PS_INIT      := $(BUILD_DIR)/ps7_init.tcl
 VITIS_PLATFORM_SPR := $(VITIS_WS)/$(VITIS_PLATFORM)/platform.spr
 VITIS_RUN_ELF      := $(VITIS_WS)/$(VITIS_RUN_APP)/Debug/$(VITIS_RUN_APP).elf
 
+# Deliberately NOT idempotent. Reusing an existing platform would be wrong in
+# the case this target is actually run for -- a changed XSA, or a changed
+# VITIS_LIBS -- so an existing platform is an error that names its own fix
+# rather than a silent reuse of a stale one.
 vitis-platform: | $(BUILD_DIR)
 	@test -f "$(VIVADO_XSA)" || { \
 	    echo "[VITIS] ERROR: no hardware platform at $(VIVADO_XSA)"; \
 	    echo "[VITIS] Run 'make xsa' first."; \
 	    exit 1; \
 	}
+	@test ! -f "$(VITIS_PLATFORM_SPR)" || { \
+	    echo "[VITIS] ERROR: platform '$(VITIS_PLATFORM)' already exists in $(VITIS_WS)"; \
+	    echo "[VITIS] Remove $(VITIS_WS) to regenerate it -- needed after an XSA"; \
+	    echo "[VITIS] or VITIS_LIBS change. Apps have to be rebuilt afterwards."; \
+	    exit 1; \
+	}
 	@echo "[VITIS] Generating platform script → $(VITIS_PLATFORM_TCL)"
 	@( \
 	echo "setws $(abspath $(VITIS_WS))"; \
 	echo "platform create -name $(VITIS_PLATFORM) -hw $(abspath $(VIVADO_XSA)) -proc $(VITIS_PROC) -os $(VITIS_OS)"; \
+	$(if $(strip $(VITIS_LIBS))$(strip $(VITIS_BSP_CONFIG)), \
+	    echo 'domain active {$(VITIS_DOMAIN)}';) \
+	$(foreach l,$(VITIS_LIBS),echo "bsp setlib -name $(l)";) \
+	$(foreach c,$(VITIS_BSP_CONFIG),echo "bsp config $(subst =, ,$(c))";) \
 	echo "platform generate"; \
 	) > $(VITIS_PLATFORM_TCL)
+	$(if $(strip $(VITIS_LIBS)),@echo "[VITIS] BSP libraries: $(VITIS_LIBS)")
+	$(if $(strip $(VITIS_BSP_CONFIG)),@echo "[VITIS] BSP config: $(VITIS_BSP_CONFIG)")
 	@echo "[VITIS] Building platform $(VITIS_PLATFORM)..."
 	$(XSCT) $(VITIS_PLATFORM_TCL)
 
@@ -424,9 +457,10 @@ vitis-apps: | $(BUILD_DIR)
 	    echo 'if { [file exists {$(abspath $(VITIS_WS))/$(a)/.project}] } {'; \
 	    echo '    puts {[VITIS] app $(a) already exists - reusing}'; \
 	    echo '} else {'; \
-	    echo '    app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {Empty Application(C)}'; \
+	    echo '    app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {$(or $(VITIS_APP_$(a)_TEMPLATE),$(VITIS_TEMPLATE))}'; \
 	    echo '}'; \
-	    echo "importsources -name $(a) -path $(abspath $(VITIS_APP_$(a)_SRC))"; \
+	    $(if $(strip $(VITIS_APP_$(a)_SRC)),\
+	        echo "importsources -name $(a) -path $(abspath $(VITIS_APP_$(a)_SRC))";) \
 	    echo "app build -name $(a)";) \
 	) > $(VITIS_APPS_TCL)
 	@echo "[VITIS] Building app(s): $(VITIS_APPS)"
