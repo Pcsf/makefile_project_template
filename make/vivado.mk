@@ -1,34 +1,67 @@
 # ==============================================================================
 # vivado.mk — Xilinx Vivado toolchain rules
-# Handles: VHDL / Verilog / SV + XDC constraints → synthesis → impl → bitstream
 #
-# Targets:
-#   all / bitstream — full build: synthesis + implementation + bitstream
-#   synth           — synthesis only
-#   impl            — synthesis + implementation
-#   sim             — XSim behavioural simulation, batch (run to completion)
-#   sim-gui         — XSim behavioural simulation, waveform GUI
-#   program         — program the bitstream onto the connected device
+# The build is Non-Project Mode: sources are read, implemented and exported
+# inside one in-memory Vivado session and no .xpr is written. A project is
+# still available, but only to READ — see "The project is for reading" below.
 #
-# ── Compilation order strategy ────────────────────────────────────────────────
-# Vivado's read_vhdl in non-project (Tcl batch) mode processes files in the
-# order they are listed — same dependency rules as any VHDL tool apply.
-# VHDL_SRCS order is controlled by per-directory .compile_order files (Layer 2)
-# or VHDL_SRCS_DIR in project.mk (Layer 1 — list directories in order).
+# Build targets (Non-Project, in-memory):
+#   synth       synthesis only, leaves post_synth.dcp
+#   impl        synthesis + implementation, leaves post_route.dcp
+#   bitstream   the above + .bit                                  (also 'all')
+#   xsa         the above + hardware platform export for Vitis
 #
-# Note: Vivado's 'update_compile_order' reorders sources for VHDL-2008 based
-# on its own analysis, but this is unreliable for older VHDL standards and
-# for configurations / packages that span library boundaries.  Relying on
-# explicit order (Layers 1/2) is safer.
+# Reading and block-design authoring (.xpr):
+#   project     build a browsable project from the same sources
+#   gui         open the newest checkpoint in the IDE
+#   project-gui open the browsable project in the IDE
+#   bd-draft    create the editable block-design project
+#   bd-gui      open that project in the IDE
+#   bd-export   write the block design back out as versioned Tcl
+#
+# Simulation, software, hardware:
+#   sim / sim-gui                 XSim behavioural simulation
+#   vitis-platform / -apps / -run bare-metal software on the exported platform
+#   program                       load the bitstream over JTAG
+#
+# ── The project is for reading ────────────────────────────────────────────────
+# Nothing authored in the IDE survives, because nothing here builds from a
+# project. The single sanctioned round trip is the block design:
+#
+#   make bd-draft   →  edit and SAVE in the IDE  →  make bd-export  →  commit
+#
+# The exported .tcl is the versioned artefact; the project that produced it is
+# disposable. That export can express everything IP Integrator can — interface
+# connections, address assignment, automation, hierarchies — none of which the
+# VIVADO_BD_* bootstrap keys below can reach.
+#
+# ── Compilation order ─────────────────────────────────────────────────────────
+# Vivado reads files in the order given and applies the same dependency rules
+# as any VHDL tool. That order comes from per-directory .compile_order files
+# (Layer 2) or VHDL_SRCS_DIR in project.mk (Layer 1). Non-Project Mode has no
+# update_compile_order to fall back on, which makes the explicit order the
+# contract rather than a safety net.
 # ==============================================================================
 
-VIVADO_PROJDIR := $(BUILD_DIR)/vivado_proj
-VIVADO_TCL     := $(BUILD_DIR)/vivado_build.tcl
-VIVADO_BIT     := $(VIVADO_PROJDIR)/$(PROJECT_NAME).runs/impl_1/$(VIVADO_TOP).bit
+# ── Layout ────────────────────────────────────────────────────────────────────
+# VIVADO_OUT is also the working directory of every in-memory run: Vivado
+# writes an in-memory project's output products (.gen/, .srcs/, .Xil/) into the
+# current directory, so the recipes cd into it rather than litter the repo root.
+VIVADO_OUT      := $(BUILD_DIR)/nonproject
+VIVADO_PROJDIR  := $(abspath $(BUILD_DIR)/vivado_proj)
+VIVADO_PARAMS   := $(BUILD_DIR)/vivado_params.tcl
+VIVADO_SCRIPTS  := $(TEMPLATE_DIR)scripts
+VIVADO_ENGINE   := $(VIVADO_SCRIPTS)/vivado_nonproject.tcl
+VIVADO_PROJ_TCL := $(VIVADO_SCRIPTS)/vivado_project.tcl
+
+VIVADO_BIT      := $(VIVADO_OUT)/$(VIVADO_TOP).bit
 # Hardware platform handed to Vitis. Overridable so a project can publish it
 # somewhere its software build expects.
-VIVADO_XSA     ?= $(BUILD_DIR)/$(VIVADO_TOP).xsa
-VIVADO_FLAGS   := -mode batch -nojournal -nolog -quiet
+VIVADO_XSA      ?= $(VIVADO_OUT)/$(VIVADO_TOP).xsa
+VIVADO_DCP_ROUTE := $(VIVADO_OUT)/post_route.dcp
+VIVADO_DCP_SYNTH := $(VIVADO_OUT)/post_synth.dcp
+
+VIVADO_FLAGS    := -mode batch -notrace
 
 # ── Board files (optional) ────────────────────────────────────────────────────
 # A board part supplies presets a bare part number cannot: DDR timing and MIO
@@ -38,8 +71,6 @@ VIVADO_FLAGS   := -mode batch -nojournal -nolog -quiet
 # builds without modifying the Vivado installation.
 #   VIVADO_BOARD_REPO := vivado/board_files
 #   VIVADO_BOARD_PART := digilentinc.com:arty-z7-20:part0:1.1
-# NOTE: board.repoPaths must be set BEFORE create_project, which the generator
-# below takes care of; setting it afterwards silently finds nothing.
 VIVADO_BOARD_REPO ?=
 VIVADO_BOARD_PART ?=
 
@@ -47,66 +78,275 @@ VIVADO_BOARD_PART ?=
 # VHDL-2008 for every source by default. List the exceptions in VIVADO_VHDL93.
 # The usual reason for an exception is IP Integrator: the top file of an RTL
 # module reference may not be VHDL-2008 (ERROR [filemgmt 56-195]), so a thin
-# wrapper gets built as VHDL-93 while the core it wraps stays 2008.
+# wrapper is read as VHDL-93 while the core it wraps stays 2008.
 VIVADO_VHDL_STD ?= 2008
 VIVADO_VHDL93   ?=
 
 # ── Simulation-only sources ───────────────────────────────────────────────────
-# Files listed here go to the sim_1 fileset ONLY; everything else in
-# VHDL_SRCS/V_SRCS goes to sources_1 for synthesis. Testbenches are the obvious
+# Files listed here are never handed to synthesis. Testbenches are the obvious
 # case. The one that bites is a second architecture of a synthesizable entity
-# (e.g. a TDD stub): left in sources_1, Vivado binds whichever architecture was
-# analysed LAST, so a dead-bus stub can be synthesized in place of the real
-# core — clean build log, dead hardware.
+# (e.g. a TDD stub): read as a synthesis source, Vivado binds whichever
+# architecture was analysed LAST, so a dead-bus stub can be synthesized in
+# place of the real core — clean build log, dead hardware.
 VIVADO_SIM_SRCS ?=
 
 # ── Top-level generics ────────────────────────────────────────────────────────
-# Passed to the synthesis fileset, e.g.
 #   VIVADO_GENERICS := G_VERSION=32'h00010001 G_BLINK_DIV_RST=125000000
 VIVADO_GENERICS ?=
 
-# ── IP ────────────────────────────────────────────────────────────────────────
+# ── IP (create_ip) ────────────────────────────────────────────────────────────
 # VIVADO_IP lists instance (module) names; per instance:
 #   VIVADO_IP_<name>_VLNV   := xilinx.com:ip:jtag_axi:1.2
 #   VIVADO_IP_<name>_CONFIG := CONFIG.PROTOCOL=2 CONFIG.M_AXI_ADDR_WIDTH=32
-# Each is generated IN CONTEXT (generate_synth_checkpoint false). Out-of-context
-# is Vivado's default and produces its checkpoint from a child run launched by
-# launch_runs; a non-project flow that skips that gets the IP as an empty box:
-#   ERROR [DRC INBB-3] ... has undefined contents and is considered a black box.
+#   VIVADO_IP_<name>_PRESET := path/to/board/preset.xml   (expanded first)
+# Each is generated in context, so the design's own synthesis compiles it.
 VIVADO_IP ?=
 
-# Synthesis sources are everything except the simulation-only ones.
-_vivado_synth_vhdl = $(filter-out $(VIVADO_SIM_SRCS),$(VHDL_SRCS))
-_vivado_synth_v    = $(filter-out $(VIVADO_SIM_SRCS),$(V_SRCS))
-_vivado_sim_only   = $(filter $(VIVADO_SIM_SRCS),$(VHDL_SRCS) $(V_SRCS))
+# ── Block design ──────────────────────────────────────────────────────────────
+# VIVADO_BD_TCL is the versioned write_bd_tcl export and the source of truth.
+# When the file exists, the build replays it and every VIVADO_BD_* key below is
+# ignored. When it does not, the design is built from those keys — the
+# bootstrap path, which exists so a processor-only handoff design works before
+# anyone has opened the IDE.
+#
+# The reason a block design is worth having at all is write_hw_platform: it
+# derives its .hwh hardware handoff from a block design, and a pure-RTL export
+# gives Vitis a bitstream with no address map and no ps7_init — no bare-metal
+# platform, no FSBL.
+#
+#   VIVADO_BD           block design name
+#   VIVADO_BD_TCL       versioned export; canonical once it exists
+#   VIVADO_BD_CELLS     bootstrap cells; each reuses VIVADO_IP_<cell>_VLNV,
+#                       _PRESET and _CONFIG, exactly like a create_ip IP
+#   VIVADO_BD_EXT_INTF  interface pins to expose, e.g. ps7_0/M_AXI_GP0
+#   VIVADO_BD_EXT_PINS  scalar pins to expose, e.g. ps7_0/FCLK_CLK0
+#   VIVADO_BD_NETS      internal connections as a=b pin pairs
+#   VIVADO_BD_INTF_FREQ external interface clock rates, as port=hz. An external
+#                       port does not inherit the rate of the pin it was made
+#                       from, and validate_bd_design fails on the mismatch.
+VIVADO_BD           ?=
+VIVADO_BD_TCL       ?=
+VIVADO_BD_CELLS     ?=
+VIVADO_BD_EXT_INTF  ?=
+VIVADO_BD_EXT_PINS  ?=
+VIVADO_BD_NETS      ?=
+VIVADO_BD_INTF_FREQ ?=
 
-# file_type for one VHDL file: VHDL-93 when listed in VIVADO_VHDL93, else the
-# project default. Vivado spells the 2008 type "VHDL 2008" and plain 93 "VHDL".
-_vivado_ftype = $(if $(filter $(1),$(VIVADO_VHDL93)),VHDL,VHDL $(VIVADO_VHDL_STD))
+# ── ELF association (soft-core processors) ────────────────────────────────────
+# Embeds compiled software in block RAM at bitstream time. MicroBlaze only — a
+# Zynq PS loads from DDR/QSPI and needs nothing here.
+#   VIVADO_ELF               := sw/hello.elf
+#   VIVADO_ELF_<file>_REF    := microblaze_0
+VIVADO_ELF ?=
+
+# ── Implementation strategy ───────────────────────────────────────────────────
+# Default directives everywhere; escalate per step when timing actually bites.
+# Explore-class directives cost real build time on every run, so they are opt-in.
+#   VIVADO_PHYS_OPT_DIRECTIVE := AggressiveExplore
+#   VIVADO_PHYS_OPT_ON_WNS    := 1   run it only when placement missed timing
+VIVADO_SYNTH_DIRECTIVE    ?=
+VIVADO_OPT_DIRECTIVE      ?= Default
+VIVADO_PLACE_DIRECTIVE    ?= Default
+VIVADO_ROUTE_DIRECTIVE    ?= Default
+VIVADO_PHYS_OPT_DIRECTIVE ?=
+VIVADO_PHYS_OPT_ON_WNS    ?= 0
+VIVADO_REPORTS            ?= 1
+VIVADO_MAX_THREADS        ?=
 
 # ── Simulation settings (XSim standalone flow: xvhdl → xelab → xsim) ──────────
-# Simulation top-level entity — usually the testbench, not the synthesis top.
 VIVADO_SIM_TOP ?= $(VIVADO_TOP)
 XVHDL          := xvhdl
 XELAB          := xelab
 XSIM           := xsim
 XVHDL_FLAGS    ?= --2008
-# -debug typical keeps signal visibility for the waveform GUI
 XELAB_FLAGS    ?= -debug typical
-# Extra run-time options, e.g. generics: XELAB_FLAGS += -generic_top G_RED=true
 XSIM_DIR       := $(BUILD_DIR)/xsim
 XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
 
-.PHONY: all tcl synth impl bitstream xsa program sim sim-gui sim-elab vitis-platform vitis-apps vitis-run
+# ── Derived source sets ───────────────────────────────────────────────────────
+_vivado_synth_vhdl = $(filter-out $(VIVADO_SIM_SRCS),$(VHDL_SRCS))
+_vivado_synth_v    = $(filter-out $(VIVADO_SIM_SRCS),$(V_SRCS))
+
+# ── Tcl list helpers ──────────────────────────────────────────────────────────
+# Each element is braced individually so Tcl takes it literally — paths and
+# values survive without further escaping.
+_tcl_files = $(foreach f,$(1),{$(abspath $(f))})
+_tcl_words = $(foreach w,$(1),{$(w)})
+
+# Board presets. Vivado's own CONFIG.PCW_IMPORT_BOARD_PRESET does nothing on an
+# IP made with create_ip outside IP Integrator — accepted silently, applies no
+# parameters (probed on 2021.2) — so the preset's parameters are expanded here
+# and emitted BEFORE _CONFIG, letting a project take the vendor's whole preset
+# and still override individual values.
+#
+# The IP name handed to the script comes from the VLNV's third field, since a
+# preset file carries one preset per IP and the right block must be selected.
+_vivado_preset_ipname = $(word 3,$(subst :, ,$(VIVADO_IP_$(1)_VLNV)))
+_vivado_preset_dict   = $(if $(strip $(PRESET_SCRIPT)),\
+    $(shell $(PRESET_SCRIPT) $(VIVADO_IP_$(1)_PRESET) $(call _vivado_preset_ipname,$(1))),\
+    $(error VIVADO_IP_$(1)_PRESET is set but no preset script exists for $(HOST_OS)))
+
+# Full CONFIG list for an IP or BD cell: preset first, explicit CONFIG second.
+_vivado_cfg = $(if $(strip $(VIVADO_IP_$(1)_PRESET)),$(call _vivado_preset_dict,$(1)) )$(subst =, ,$(VIVADO_IP_$(1)_CONFIG))
+
+.PHONY: all params synth impl bitstream xsa \
+        project project-gui gui bd-draft bd-gui bd-export \
+        sim sim-gui sim-elab vitis-platform vitis-apps vitis-run program
 
 all: bitstream
 
-$(BUILD_DIR) $(VIVADO_PROJDIR) $(XSIM_DIR):
+$(BUILD_DIR) $(VIVADO_OUT) $(XSIM_DIR):
 	$(MKDIR) $@
+
+# ── Parameter file ────────────────────────────────────────────────────────────
+# The only generated Tcl. It carries data, never flow: the flow lives in
+# $(VIVADO_SCRIPTS)/, committed and reviewable on its own.
+#
+# Regenerated on every invocation — project.mk values and $(wildcard) source
+# lists both change without any file this could depend on changing.
+params: | $(VIVADO_OUT)
+	@echo "[VIVADO] Writing parameters → $(VIVADO_PARAMS)"
+	@( \
+	echo "# Generated by vivado.mk — do not edit."; \
+	echo "set ::p(part)   {$(VIVADO_PART)}"; \
+	echo "set ::p(top)    {$(VIVADO_TOP)}"; \
+	echo "set ::p(outdir) {$(abspath $(VIVADO_OUT))}"; \
+	echo "set ::p(proj_name) {$(PROJECT_NAME)}"; \
+	echo "set ::p(proj_dir)  {$(VIVADO_PROJDIR)}"; \
+	echo "set ::p(target_language) {VHDL}"; \
+	$(if $(strip $(VIVADO_BOARD_REPO)),echo "set ::p(board_repo) {$(abspath $(VIVADO_BOARD_REPO))}";) \
+	$(if $(strip $(VIVADO_BOARD_PART)),echo "set ::p(board_part) {$(VIVADO_BOARD_PART)}";) \
+	echo "set ::p(vhdl)    {$(call _tcl_files,$(_vivado_synth_vhdl))}"; \
+	echo "set ::p(vhdl93)  {$(call _tcl_files,$(VIVADO_VHDL93))}"; \
+	echo "set ::p(verilog) {$(call _tcl_files,$(_vivado_synth_v))}"; \
+	echo "set ::p(xdc)     {$(call _tcl_files,$(VIVADO_XDC))}"; \
+	echo "set ::p(generics) {$(call _tcl_words,$(VIVADO_GENERICS))}"; \
+	echo "set ::p(ip) {$(call _tcl_words,$(VIVADO_IP))}"; \
+	$(foreach ip,$(VIVADO_IP),\
+	    echo "set ::p(ip,$(ip),vlnv)   {$(VIVADO_IP_$(ip)_VLNV)}"; \
+	    echo "set ::p(ip,$(ip),config) {$(call _vivado_cfg,$(ip))}";) \
+	$(if $(strip $(VIVADO_BD)),\
+	    echo "set ::p(bd_name) {$(VIVADO_BD)}"; \
+	    $(if $(strip $(VIVADO_BD_TCL)),echo "set ::p(bd_export) {$(abspath $(VIVADO_BD_TCL))}";) \
+	    $(if $(wildcard $(VIVADO_BD_TCL)),echo "set ::p(bd_tcl) {$(abspath $(VIVADO_BD_TCL))}";) \
+	    echo "set ::p(bd_cells) {$(call _tcl_words,$(VIVADO_BD_CELLS))}"; \
+	    $(foreach c,$(VIVADO_BD_CELLS),\
+	        echo "set ::p(bd,$(c),vlnv)   {$(VIVADO_IP_$(c)_VLNV)}"; \
+	        echo "set ::p(bd,$(c),config) {$(call _vivado_cfg,$(c))}";) \
+	    echo "set ::p(bd_ext_intf) {$(call _tcl_words,$(VIVADO_BD_EXT_INTF))}"; \
+	    echo "set ::p(bd_ext_pins) {$(call _tcl_words,$(VIVADO_BD_EXT_PINS))}"; \
+	    echo "set ::p(bd_nets) {$(foreach n,$(VIVADO_BD_NETS),$(call _tcl_words,$(subst =, ,$(n))))}"; \
+	    echo "set ::p(bd_intf_freq) {$(foreach f,$(VIVADO_BD_INTF_FREQ),$(call _tcl_words,$(subst =, ,$(f))))}";) \
+	$(if $(strip $(VIVADO_ELF)),\
+	    echo "set ::p(elf) {$(call _tcl_files,$(VIVADO_ELF))}"; \
+	    $(foreach e,$(VIVADO_ELF),\
+	        echo "set ::p(elf,$(abspath $(e)),ref) {$(VIVADO_ELF_$(notdir $(e))_REF)}";)) \
+	$(if $(strip $(VIVADO_SYNTH_DIRECTIVE)),echo "set ::p(synth_directive) {$(VIVADO_SYNTH_DIRECTIVE)}";) \
+	echo "set ::p(opt_directive)   {$(VIVADO_OPT_DIRECTIVE)}"; \
+	echo "set ::p(place_directive) {$(VIVADO_PLACE_DIRECTIVE)}"; \
+	echo "set ::p(route_directive) {$(VIVADO_ROUTE_DIRECTIVE)}"; \
+	echo "set ::p(phys_opt_directive) {$(VIVADO_PHYS_OPT_DIRECTIVE)}"; \
+	echo "set ::p(phys_opt_on_wns)    {$(VIVADO_PHYS_OPT_ON_WNS)}"; \
+	echo "set ::p(reports) {$(VIVADO_REPORTS)}"; \
+	$(if $(strip $(VIVADO_MAX_THREADS)),echo "set ::p(max_threads) {$(VIVADO_MAX_THREADS)}";) \
+	) > $(VIVADO_PARAMS)
+
+# ── Non-Project build ─────────────────────────────────────────────────────────
+# One Vivado invocation per target, always the full chain: an in-memory design
+# does not outlive the process, so there is nothing to hand to a second run.
+# This is also why the old double-synthesis failure mode cannot recur — there
+# is no generated script that a later target can append to and re-source.
+define _vivado_run
+	cd $(VIVADO_OUT) && $(VIVADO) $(VIVADO_FLAGS) \
+	    -log vivado_$(1).log -journal vivado_$(1).jou \
+	    -source $(abspath $(VIVADO_ENGINE)) \
+	    -tclargs -params $(abspath $(VIVADO_PARAMS)) -stage $(1)
+endef
+
+synth: params
+	@echo "[VIVADO] Synthesis (non-project)..."
+	$(call _vivado_run,synth)
+
+impl: params
+	@echo "[VIVADO] Synthesis + implementation (non-project)..."
+	$(call _vivado_run,impl)
+
+bitstream: params
+	@echo "[VIVADO] Full build to bitstream (non-project)..."
+	$(call _vivado_run,bitstream)
+	@test -f "$(VIVADO_BIT)" || { echo "[VIVADO] ERROR: no bitstream at $(VIVADO_BIT)"; exit 1; }
+	@echo "[VIVADO] Bitstream ready: $(VIVADO_BIT)"
+
+# ps7_init.tcl is generated among the block design's output products. It is
+# copied out because the in-tree path moves whenever the design is restructured.
+xsa: params
+	@echo "[VIVADO] Full build + hardware platform export (non-project)..."
+	$(call _vivado_run,xsa)
+	@test -f "$(VIVADO_XSA)" || { echo "[VIVADO] ERROR: no XSA at $(VIVADO_XSA)"; exit 1; }
+	@echo "[VIVADO] Hardware platform ready: $(VIVADO_XSA)"
+	@ps7=$$(find $(VIVADO_OUT) -name ps7_init.tcl 2>$(NULL) | head -1); \
+	if [ -n "$$ps7" ]; then \
+	    cp "$$ps7" $(VITIS_PS_INIT); \
+	    echo "[VIVADO] PS init script: $(VITIS_PS_INIT)"; \
+	fi
+
+# ── Reading: checkpoints and the browsable project ────────────────────────────
+# Checkpoints are the native way to inspect a non-project build — the routed
+# design opens with its constraints, timing and placement intact.
+gui:
+	@if [ -f "$(VIVADO_DCP_ROUTE)" ]; then \
+	    echo "[VIVADO] Opening $(VIVADO_DCP_ROUTE)..."; \
+	    $(VIVADO) -mode gui $(VIVADO_DCP_ROUTE) & \
+	elif [ -f "$(VIVADO_DCP_SYNTH)" ]; then \
+	    echo "[VIVADO] Opening $(VIVADO_DCP_SYNTH)..."; \
+	    $(VIVADO) -mode gui $(VIVADO_DCP_SYNTH) & \
+	else \
+	    echo "[VIVADO] ERROR: no checkpoint yet. Run 'make impl' or 'make bitstream' first."; \
+	    exit 1; \
+	fi
+
+# A .xpr built from the same sources, for browsing hierarchy, schematics and IP
+# dialogs. Never built from. FORCE=1 recreates it, discarding IDE edits.
+project: params
+	@echo "[VIVADO] Creating inspection project..."
+	cd $(BUILD_DIR) && $(VIVADO) $(VIVADO_FLAGS) \
+	    -log vivado_project.log -journal vivado_project.jou \
+	    -source $(abspath $(VIVADO_PROJ_TCL)) \
+	    -tclargs -params $(abspath $(VIVADO_PARAMS)) -mode project $(if $(FORCE),-force)
+
+project-gui:
+	@test -f "$(VIVADO_PROJDIR)/$(PROJECT_NAME).xpr" || { \
+	    echo "[VIVADO] ERROR: no project. Run 'make project' first."; exit 1; }
+	@echo "[VIVADO] Opening $(VIVADO_PROJDIR)/$(PROJECT_NAME).xpr (read only — nothing here is built)..."
+	$(VIVADO) -mode gui $(VIVADO_PROJDIR)/$(PROJECT_NAME).xpr &
+
+# ── Block design round trip ───────────────────────────────────────────────────
+bd-draft: params
+	@test -n "$(strip $(VIVADO_BD))" || { echo "[VIVADO] ERROR: VIVADO_BD is not set"; exit 1; }
+	@test -n "$(strip $(VIVADO_BD_TCL))" || { \
+	    echo "[VIVADO] ERROR: VIVADO_BD_TCL is not set — there is nowhere to export to."; exit 1; }
+	@echo "[VIVADO] Creating block-design draft project..."
+	cd $(BUILD_DIR) && $(VIVADO) $(VIVADO_FLAGS) \
+	    -log vivado_bd_draft.log -journal vivado_bd_draft.jou \
+	    -source $(abspath $(VIVADO_PROJ_TCL)) \
+	    -tclargs -params $(abspath $(VIVADO_PARAMS)) -mode bd-draft $(if $(FORCE),-force)
+
+bd-gui: project-gui
+
+bd-export: params
+	@test -n "$(strip $(VIVADO_BD_TCL))" || { echo "[VIVADO] ERROR: VIVADO_BD_TCL is not set"; exit 1; }
+	@echo "[VIVADO] Exporting block design → $(VIVADO_BD_TCL)"
+	cd $(BUILD_DIR) && $(VIVADO) $(VIVADO_FLAGS) \
+	    -log vivado_bd_export.log -journal vivado_bd_export.jou \
+	    -source $(abspath $(VIVADO_PROJ_TCL)) \
+	    -tclargs -params $(abspath $(VIVADO_PARAMS)) -mode bd-export
+	@test -f "$(VIVADO_BD_TCL)" || { echo "[VIVADO] ERROR: nothing written to $(VIVADO_BD_TCL)"; exit 1; }
+	@echo "[VIVADO] Commit $(VIVADO_BD_TCL) — the build reads it from now on."
 
 # ── Simulation ────────────────────────────────────────────────────────────────
 # XSim writes its work library (xsim.dir) and logs into the current directory,
-# so every step runs inside $(XSIM_DIR) with absolute source paths.
+# so every step runs inside $(XSIM_DIR) with absolute source paths. Independent
+# of both flows — no project and no in-memory design involved.
 sim-elab: | $(XSIM_DIR)
 	@echo "[XSIM] Compiling VHDL sources..."
 	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(abspath $(VHDL_SRCS))
@@ -120,167 +360,6 @@ sim: sim-elab
 sim-gui: sim-elab
 	@echo "[XSIM] Launching simulation GUI..."
 	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -gui
-
-# ── Generate Tcl build script ─────────────────────────────────────────────────
-# VHDL files are added in VHDL_SRCS order (set by .compile_order / project.mk).
-# update_compile_order is called as a safety net for VHDL-2008 projects; it
-# does NOT reorder for older standards.
-tcl: | $(BUILD_DIR)
-	@echo "[VIVADO] Generating Tcl script → $(VIVADO_TCL)"
-	@( \
-	$(if $(strip $(VIVADO_BOARD_REPO)),\
-	    echo "set_param board.repoPaths [list $(abspath $(VIVADO_BOARD_REPO))]";) \
-	echo "create_project -force $(PROJECT_NAME) $(VIVADO_PROJDIR) -part $(VIVADO_PART)"; \
-	$(if $(strip $(VIVADO_BOARD_PART)),\
-	    echo "set_property board_part $(VIVADO_BOARD_PART) [current_project]";) \
-	echo "set_property target_language VHDL [current_project]"; \
-	$(if $(strip $(VIVADO_BD)),\
-	    echo "create_bd_design $(VIVADO_BD)"; \
-	    $(foreach c,$(VIVADO_BD_CELLS),\
-	        echo "create_bd_cell -type ip -vlnv $(VIVADO_IP_$(c)_VLNV) $(c)"; \
-	        $(if $(strip $(VIVADO_IP_$(c)_PRESET)),\
-	            echo "set_property -dict [list $(call _vivado_preset_dict,$(c))] [get_bd_cells $(c)]";) \
-	        $(if $(strip $(VIVADO_IP_$(c)_CONFIG)),\
-	            echo "set_property -dict [list $(subst =, ,$(VIVADO_IP_$(c)_CONFIG))] [get_bd_cells $(c)]";)) \
-	    $(foreach i,$(VIVADO_BD_EXT_INTF),\
-	        echo "make_bd_intf_pins_external [get_bd_intf_pins $(i)]";) \
-	    $(foreach p,$(VIVADO_BD_EXT_PINS),\
-	        echo "make_bd_pins_external [get_bd_pins $(p)]";) \
-	    $(foreach n,$(VIVADO_BD_NETS),\
-	        echo "connect_bd_net [get_bd_pins $(word 1,$(subst =, ,$(n)))] [get_bd_pins $(word 2,$(subst =, ,$(n)))]";) \
-	    $(foreach f,$(VIVADO_BD_INTF_FREQ),\
-	        echo "set_property CONFIG.FREQ_HZ $(word 2,$(subst =, ,$(f))) [get_bd_intf_ports $(word 1,$(subst =, ,$(f)))]";) \
-	    echo "validate_bd_design"; \
-	    echo "save_bd_design"; \
-	    echo "add_files -norecurse [make_wrapper -files [get_files $(VIVADO_BD).bd] -top -force]";) \
-	$(foreach f,$(_vivado_synth_vhdl),\
-	    echo "read_vhdl -library xil_defaultlib {$(f)}"; \
-	    echo "set_property file_type {$(call _vivado_ftype,$(f))} [get_files {$(f)}]";) \
-	$(foreach f,$(_vivado_synth_v),\
-	    echo "read_verilog {$(f)}";) \
-	$(foreach f,$(_vivado_sim_only),\
-	    echo "add_files -fileset sim_1 -norecurse {$(f)}"; \
-	    echo "set_property file_type {$(call _vivado_ftype,$(f))} [get_files -of_objects [get_filesets sim_1] {$(f)}]";) \
-	$(if $(strip $(VIVADO_SIM_TOP)),\
-	    echo "set_property top $(VIVADO_SIM_TOP) [get_filesets sim_1]";) \
-	$(foreach f,$(VIVADO_XDC),\
-	    echo "read_xdc {$(f)}";) \
-	$(foreach ip,$(VIVADO_IP),\
-	    echo "create_ip -vlnv $(VIVADO_IP_$(ip)_VLNV) -module_name $(ip)"; \
-	    $(if $(strip $(VIVADO_IP_$(ip)_PRESET)),\
-	        echo "set_property -dict [list $(call _vivado_preset_dict,$(ip))] [get_ips $(ip)]";) \
-	    $(if $(strip $(VIVADO_IP_$(ip)_CONFIG)),\
-	        echo "set_property -dict [list $(subst =, ,$(VIVADO_IP_$(ip)_CONFIG))] [get_ips $(ip)]";) \
-	    echo "set_property generate_synth_checkpoint false [get_files $(ip).xci]"; \
-	    echo "generate_target all [get_files $(ip).xci]";) \
-	echo "set_property top $(VIVADO_TOP) [current_fileset]"; \
-	$(if $(strip $(VIVADO_GENERICS)),\
-	    echo "set_property generic {$(VIVADO_GENERICS)} [current_fileset]";) \
-	echo "update_compile_order -fileset sources_1"; \
-	) > $(VIVADO_TCL)
-
-# ── Block design (optional) ───────────────────────────────────────────────────
-# VIVADO_BD names a block design to build before the RTL sources are read. It
-# exists for one reason: write_hw_platform derives its hardware handoff (.hwh)
-# from a block design, so a pure-RTL design exports an XSA carrying only a
-# bitstream — no address map, no ps7_init, nothing Vitis can build a bare-metal
-# platform or an FSBL from. Verified on 2021.2: the RTL-only export listed
-# FULL_BIT alone and reported PlatformState="pre_synth".
-#
-# Keep the block design as small as the handoff requires — typically the
-# processor alone — and leave the rest of the fabric in RTL, where it stays
-# reviewable and needs no IP Integrator module references.
-#
-#   VIVADO_BD          block design name
-#   VIVADO_BD_CELLS    cells inside it; each reuses VIVADO_IP_<cell>_VLNV,
-#                      _PRESET and _CONFIG, exactly like a create_ip IP
-#   VIVADO_BD_EXT_INTF interface pins to expose, e.g. ps7_0/M_AXI_GP0
-#   VIVADO_BD_EXT_PINS scalar pins to expose, e.g. ps7_0/FCLK_CLK0
-#   VIVADO_BD_NETS     internal connections as a=b pin pairs
-#   VIVADO_BD_INTF_FREQ  external interface port clock rates, as port=hz
-#
-# The generated wrapper is added to the sources fileset; instantiate it from
-# your own top rather than making it the top, so the fabric stays in RTL.
-VIVADO_BD          ?=
-VIVADO_BD_CELLS    ?=
-VIVADO_BD_EXT_INTF ?=
-VIVADO_BD_EXT_PINS ?=
-VIVADO_BD_NETS     ?=
-# External interface ports do not inherit the clock frequency of the pin they
-# were made from, so an overridden FCLK makes validate_bd_design fail with a
-# FREQ_HZ mismatch. Pairs of port=hz.
-VIVADO_BD_INTF_FREQ ?=
-
-# ── Board presets for create_ip IP ────────────────────────────────────────────
-# VIVADO_IP_<ip>_PRESET names a board preset XML. Its parameters for this IP are
-# expanded into the generated Tcl BEFORE VIVADO_IP_<ip>_CONFIG, so a project can
-# take the vendor's whole preset and still override individual values.
-#
-# This exists because Vivado's own CONFIG.PCW_IMPORT_BOARD_PRESET does nothing on
-# an IP made with create_ip outside IP Integrator — it is accepted silently and
-# applies no parameters (probed on 2021.2; see preset_to_config.sh).
-#
-# The IP name handed to the script comes from the VLNV's third field, since a
-# preset file carries one preset per IP and the right block must be selected.
-_vivado_preset_ipname = $(word 3,$(subst :, ,$(VIVADO_IP_$(1)_VLNV)))
-_vivado_preset_dict   = $(if $(strip $(PRESET_SCRIPT)),\
-    $(shell $(PRESET_SCRIPT) $(VIVADO_IP_$(1)_PRESET) $(call _vivado_preset_ipname,$(1))),\
-    $(error VIVADO_IP_$(1)_PRESET is set but no preset script exists for $(HOST_OS)))
-
-# ── Run-command blocks appended to the generated script ───────────────────────
-# Kept as variables so 'impl' can emit synthesis AND implementation into ONE
-# script and invoke vivado ONCE.
-#
-# 'impl' deliberately depends on 'tcl', not on 'synth'. It used to depend on
-# 'synth', which ran vivado to completion, after which impl appended to the SAME
-# script and re-sourced it — and that script starts with 'create_project -force',
-# so the second run destroyed the first project, re-read every source, and
-# synthesized all over again. Every 'make bitstream' therefore synthesized twice
-# and discarded the first result (measured 2026-08-12: two 'synth_design
-# completed successfully' lines, ~24 s each, in one bitstream build).
-#
-# Caveat: naming both on one command line ('make synth impl') appends the synth
-# block twice, since 'tcl' is phony and regenerates only once per invocation.
-# Use 'make impl' or 'make bitstream' — both already include synthesis.
-_vivado_synth_cmds = echo "launch_runs synth_1 -jobs 4"; echo "wait_on_run synth_1"; echo "if {[get_property PROGRESS [get_runs synth_1]] ne {100%}} {exit 1}";
-_vivado_impl_cmds  = echo "launch_runs impl_1 -to_step write_bitstream -jobs 4"; echo "wait_on_run impl_1"; echo "if {[get_property PROGRESS [get_runs impl_1]] ne {100%}} {exit 1}";
-# The XSA must be written from the same session that ran implementation: the
-# generated script opens with create_project -force, so a second invocation
-# would rebuild the project from scratch rather than find the results.
-# -fixed marks a non-reconfigurable platform; -include_bit embeds the bitstream
-# so Vitis can program the PL from the platform alone.
-_vivado_xsa_cmds   = echo "open_run impl_1"; echo "write_hw_platform -fixed -include_bit -force {$(abspath $(VIVADO_XSA))}";
-
-# ── Synthesis ─────────────────────────────────────────────────────────────────
-synth: tcl
-	@echo "[VIVADO] Running synthesis..."
-	@( $(_vivado_synth_cmds) ) >> $(VIVADO_TCL)
-	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
-
-# ── Implementation (includes synthesis, one vivado invocation) ────────────────
-impl: tcl
-	@echo "[VIVADO] Running synthesis + implementation..."
-	@( $(_vivado_synth_cmds) $(_vivado_impl_cmds) ) >> $(VIVADO_TCL)
-	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
-
-# ── Bitstream ─────────────────────────────────────────────────────────────────
-bitstream: impl
-	@echo "[VIVADO] Bitstream ready: $(VIVADO_BIT)"
-
-# ── Hardware platform export (XSA) ────────────────────────────────────────────
-# Synthesis, implementation and the export all happen in ONE vivado invocation,
-# for the same reason 'impl' does not depend on 'synth' — see the note above.
-xsa: tcl
-	@echo "[VIVADO] Building and exporting hardware platform..."
-	@( $(_vivado_synth_cmds) $(_vivado_impl_cmds) $(_vivado_xsa_cmds) ) >> $(VIVADO_TCL)
-	$(VIVADO) $(VIVADO_FLAGS) -source $(VIVADO_TCL)
-	@test -f "$(VIVADO_XSA)" || { echo "[VIVADO] ERROR: no XSA at $(VIVADO_XSA)"; exit 1; }
-	@echo "[VIVADO] Hardware platform ready: $(VIVADO_XSA)"
-	@ps7=$$(find $(VIVADO_PROJDIR) -name ps7_init.tcl 2>/dev/null | head -1); \
-	if [ -n "$$ps7" ]; then \
-	    cp "$$ps7" $(VITIS_PS_INIT); \
-	    echo "[VIVADO] PS init script: $(VITIS_PS_INIT)"; \
-	fi
 
 # ── Vitis: bare-metal software on the exported platform ───────────────────────
 # Consumes VIVADO_XSA. Three targets, deliberately separate because the first is
@@ -297,15 +376,12 @@ VITIS_PLATFORM ?= $(VIVADO_TOP)_plat
 VITIS_PROC     ?= ps7_cortexa9_0
 VITIS_OS       ?= standalone
 VITIS_DOMAIN   ?= standalone_domain
-# App names; each needs VITIS_APP_<name>_SRC pointing at its sources.
 VITIS_APPS     ?=
 VITIS_RUN_APP  ?= $(firstword $(VITIS_APPS))
 
 VITIS_PLATFORM_TCL := $(BUILD_DIR)/vitis_platform.tcl
 VITIS_APPS_TCL     := $(BUILD_DIR)/vitis_apps.tcl
 VITIS_RUN_TCL      := $(BUILD_DIR)/vitis_run.tcl
-# Taken from the XSA rather than the IP tree: the in-project path moves whenever
-# the design is restructured, the archive's layout does not.
 VITIS_PS_INIT      := $(BUILD_DIR)/ps7_init.tcl
 
 vitis-platform: | $(BUILD_DIR)
@@ -351,7 +427,7 @@ vitis-run: | $(BUILD_DIR)
 	@test -n "$(strip $(VITIS_RUN_APP))" || { echo "[VITIS] ERROR: VITIS_RUN_APP is empty"; exit 1; }
 	@test -f "$(VITIS_PS_INIT)" || { \
 	    echo "[VITIS] ERROR: no PS init script at $(VITIS_PS_INIT)"; \
-	    echo "[VITIS] 'make xsa' copies it out of the project tree."; \
+	    echo "[VITIS] 'make xsa' copies it out of the build tree."; \
 	    exit 1; \
 	}
 	@echo "[VITIS] Generating run script → $(VITIS_RUN_TCL)"
@@ -373,7 +449,7 @@ vitis-run: | $(BUILD_DIR)
 	@echo "[VITIS] Running $(VITIS_RUN_APP) on hardware..."
 	$(XSCT) $(VITIS_RUN_TCL)
 
-# ── Program device (optional) ─────────────────────────────────────────────────
+# ── Program device ────────────────────────────────────────────────────────────
 # Optional overrides:
 #   VIVADO_HW_SERVER  hw_server URL, e.g. localhost:3121. Empty = local server.
 #   VIVADO_HW_TARGET  target pattern when several cables are attached.
