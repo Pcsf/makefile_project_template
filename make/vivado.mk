@@ -438,11 +438,34 @@ vitis-platform: | $(BUILD_DIR)
 	@echo "[VITIS] Building platform $(VITIS_PLATFORM)..."
 	$(XSCT) $(VITIS_PLATFORM_TCL)
 
+# The xsct fragment that creates (when absent), overlays and builds ONE app.
+# Shared by vitis-apps, which does every app in VITIS_APPS, and by the ELF rule
+# further down, which does a single one. $(1) is the app name.
+#
 # 'app create' is guarded by a file-existence test rather than a bare catch, so
 # that re-runs are still idempotent but a genuine failure keeps its own error
 # message. Wrapping it in 'catch' hides the real cause — a missing platform
 # reports only "The project given does not exist in workspace" from the later
 # 'app build', which points at the wrong thing entirely.
+vitis_app_tcl = \
+	echo 'if { [file exists {$(abspath $(VITIS_WS))/$(1)/.project}] } {'; \
+	echo '    puts {[VITIS] app $(1) already exists - reusing}'; \
+	echo '} else {'; \
+	echo '    app create -name $(1) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {$(or $(VITIS_APP_$(1)_TEMPLATE),$(VITIS_TEMPLATE))}'; \
+	echo '}'; \
+	$(if $(strip $(VITIS_APP_$(1)_SRC)),\
+	    echo "importsources -name $(1) -path $(abspath $(VITIS_APP_$(1)_SRC))";) \
+	echo "app build -name $(1)";
+
+# Files whose modification makes an app's ELF stale: its version-controlled
+# overlay directory, if it has one. The workspace copy under $(VITIS_WS) is a
+# build artefact -- importsources rewrites it on every build, so treating it as
+# a prerequisite would rebuild forever. An app built purely from a vendor
+# template therefore has no prerequisites and is built only when its ELF is
+# missing; to iterate on a template's own sources, copy the file you want to
+# change into the overlay directory, which is where edits belong anyway.
+vitis_app_srcs = $(if $(VITIS_APP_$(1)_SRC),$(shell find $(VITIS_APP_$(1)_SRC) -type f 2>/dev/null))
+
 vitis-apps: | $(BUILD_DIR)
 	@test -n "$(strip $(VITIS_APPS))" || { echo "[VITIS] ERROR: VITIS_APPS is empty"; exit 1; }
 	@test -f "$(VITIS_PLATFORM_SPR)" || { \
@@ -453,17 +476,26 @@ vitis-apps: | $(BUILD_DIR)
 	@echo "[VITIS] Generating app script → $(VITIS_APPS_TCL)"
 	@( \
 	echo "setws $(abspath $(VITIS_WS))"; \
-	$(foreach a,$(VITIS_APPS),\
-	    echo 'if { [file exists {$(abspath $(VITIS_WS))/$(a)/.project}] } {'; \
-	    echo '    puts {[VITIS] app $(a) already exists - reusing}'; \
-	    echo '} else {'; \
-	    echo '    app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {$(or $(VITIS_APP_$(a)_TEMPLATE),$(VITIS_TEMPLATE))}'; \
-	    echo '}'; \
-	    $(if $(strip $(VITIS_APP_$(a)_SRC)),\
-	        echo "importsources -name $(a) -path $(abspath $(VITIS_APP_$(a)_SRC))";) \
-	    echo "app build -name $(a)";) \
+	$(foreach a,$(VITIS_APPS),$(call vitis_app_tcl,$(a))) \
 	) > $(VITIS_APPS_TCL)
 	@echo "[VITIS] Building app(s): $(VITIS_APPS)"
+	$(XSCT) $(VITIS_APPS_TCL)
+
+# Build one app's ELF when its sources are newer, or when it is missing. This
+# is what lets an edit-and-run cycle be a single 'make vitis-run': the ELF is a
+# real file with real prerequisites, so make decides whether xsct needs to run
+# at all. vitis-apps stays available for rebuilding everything on purpose.
+$(VITIS_RUN_ELF): $(call vitis_app_srcs,$(VITIS_RUN_APP)) | $(BUILD_DIR)
+	@test -f "$(VITIS_PLATFORM_SPR)" || { \
+	    echo "[VITIS] ERROR: no platform '$(VITIS_PLATFORM)' in $(VITIS_WS)"; \
+	    echo "[VITIS] Run 'make vitis-platform' first."; \
+	    exit 1; \
+	}
+	@echo "[VITIS] $(VITIS_RUN_APP) is out of date — rebuilding"
+	@( \
+	echo "setws $(abspath $(VITIS_WS))"; \
+	$(call vitis_app_tcl,$(VITIS_RUN_APP)) \
+	) > $(VITIS_APPS_TCL)
 	$(XSCT) $(VITIS_APPS_TCL)
 
 # The rules encoded below were each learned by breaking them:
@@ -479,14 +511,13 @@ vitis-apps: | $(BUILD_DIR)
 #   tolerate an already-stopped core #1 — xsct raises "Already stopped" on a
 #     redundant 'stop', so any run that aborted while halted would otherwise
 #     poison every following run at line 4, before it can reset anything
-vitis-run: | $(BUILD_DIR)
+# Depends on the ELF rather than merely checking for it, so a source edit is
+# picked up by 'make vitis-run' alone. The dependency is suppressed when
+# VITIS_RUN_APP is empty, so that case still reaches the explicit error below
+# instead of make trying to build a nonsense path.
+vitis-run: $(if $(strip $(VITIS_RUN_APP)),$(VITIS_RUN_ELF)) | $(BUILD_DIR)
 	@test -f "$(VIVADO_BIT)" || { echo "[VITIS] ERROR: no bitstream at $(VIVADO_BIT)"; exit 1; }
 	@test -n "$(strip $(VITIS_RUN_APP))" || { echo "[VITIS] ERROR: VITIS_RUN_APP is empty"; exit 1; }
-	@test -f "$(VITIS_RUN_ELF)" || { \
-	    echo "[VITIS] ERROR: no application ELF at $(VITIS_RUN_ELF)"; \
-	    echo "[VITIS] Run 'make vitis-apps' first."; \
-	    exit 1; \
-	}
 	@test -f "$(VITIS_PS_INIT)" || { \
 	    echo "[VITIS] ERROR: no PS init script at $(VITIS_PS_INIT)"; \
 	    echo "[VITIS] 'make xsa' copies it out of the build tree."; \
