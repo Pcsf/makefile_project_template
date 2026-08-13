@@ -507,7 +507,14 @@ $(VITIS_RUN_ELF): $(call vitis_app_srcs,$(VITIS_RUN_APP)) | $(BUILD_DIR)
 #   ps7_init before loading the PL — FCLK comes from the PS PLLs
 #   the bitstream goes in after ps7_post_config, not before
 #   end with 'con' — a halted A9 eventually wedges the DAP into
-#     "AHB AP transaction error", recoverable only by replugging the cable
+#     "AHB AP transaction error", recoverable only by replugging the cable.
+#     BOTH cores, not just #0. Until 2026-08-13 this script stopped core#1 at the
+#     top and never resumed it: the closing 'con' lands on core#0, because the
+#     target was switched two lines earlier. Every run therefore left an A9
+#     halted, and the DAP wedged on some later connect — intermittently, which
+#     is what made it look like flaky hardware rather than a missing line. Three
+#     wedges in one session, each costing a physical replug of J14, before the
+#     asymmetry between the stop and the resume was spotted.
 #   tolerate an already-stopped core #1 — xsct raises "Already stopped" on a
 #     redundant 'stop', so any run that aborted while halted would otherwise
 #     poison every following run at line 4, before it can reset anything
@@ -538,6 +545,9 @@ vitis-run: $(if $(strip $(VITIS_RUN_APP)),$(VITIS_RUN_ELF)) | $(BUILD_DIR)
 	echo "fpga -file $(abspath $(VIVADO_BIT))"; \
 	echo "dow $(abspath $(VITIS_RUN_ELF))"; \
 	echo "con"; \
+	echo 'targets -set -filter {name =~ "*Cortex-A9*#1"}'; \
+	echo 'if { [catch { con } msg] } { puts "core#1 resume skipped: $$msg" }'; \
+	echo 'targets -set -filter {name =~ "*Cortex-A9*#0"}'; \
 	) > $(VITIS_RUN_TCL)
 	@echo "[VITIS] Running $(VITIS_RUN_APP) on hardware..."
 	$(XSCT) $(VITIS_RUN_TCL)
