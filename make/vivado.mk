@@ -384,6 +384,12 @@ VITIS_APPS_TCL     := $(BUILD_DIR)/vitis_apps.tcl
 VITIS_RUN_TCL      := $(BUILD_DIR)/vitis_run.tcl
 VITIS_PS_INIT      := $(BUILD_DIR)/ps7_init.tcl
 
+# What each stage leaves behind, so the next stage can check for it up front
+# instead of discovering the gap halfway through an xsct session. 'platform.spr'
+# is the descriptor Vitis itself uses to recognise a platform project.
+VITIS_PLATFORM_SPR := $(VITIS_WS)/$(VITIS_PLATFORM)/platform.spr
+VITIS_RUN_ELF      := $(VITIS_WS)/$(VITIS_RUN_APP)/Debug/$(VITIS_RUN_APP).elf
+
 vitis-platform: | $(BUILD_DIR)
 	@test -f "$(VIVADO_XSA)" || { \
 	    echo "[VITIS] ERROR: no hardware platform at $(VIVADO_XSA)"; \
@@ -399,13 +405,27 @@ vitis-platform: | $(BUILD_DIR)
 	@echo "[VITIS] Building platform $(VITIS_PLATFORM)..."
 	$(XSCT) $(VITIS_PLATFORM_TCL)
 
+# 'app create' is guarded by a file-existence test rather than a bare catch, so
+# that re-runs are still idempotent but a genuine failure keeps its own error
+# message. Wrapping it in 'catch' hides the real cause — a missing platform
+# reports only "The project given does not exist in workspace" from the later
+# 'app build', which points at the wrong thing entirely.
 vitis-apps: | $(BUILD_DIR)
 	@test -n "$(strip $(VITIS_APPS))" || { echo "[VITIS] ERROR: VITIS_APPS is empty"; exit 1; }
+	@test -f "$(VITIS_PLATFORM_SPR)" || { \
+	    echo "[VITIS] ERROR: no platform '$(VITIS_PLATFORM)' in $(VITIS_WS)"; \
+	    echo "[VITIS] Run 'make vitis-platform' first."; \
+	    exit 1; \
+	}
 	@echo "[VITIS] Generating app script → $(VITIS_APPS_TCL)"
 	@( \
 	echo "setws $(abspath $(VITIS_WS))"; \
 	$(foreach a,$(VITIS_APPS),\
-	    echo "catch { app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {Empty Application(C)} }"; \
+	    echo 'if { [file exists {$(abspath $(VITIS_WS))/$(a)/.project}] } {'; \
+	    echo '    puts {[VITIS] app $(a) already exists - reusing}'; \
+	    echo '} else {'; \
+	    echo '    app create -name $(a) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {Empty Application(C)}'; \
+	    echo '}'; \
 	    echo "importsources -name $(a) -path $(abspath $(VITIS_APP_$(a)_SRC))"; \
 	    echo "app build -name $(a)";) \
 	) > $(VITIS_APPS_TCL)
@@ -422,9 +442,17 @@ vitis-apps: | $(BUILD_DIR)
 #   the bitstream goes in after ps7_post_config, not before
 #   end with 'con' — a halted A9 eventually wedges the DAP into
 #     "AHB AP transaction error", recoverable only by replugging the cable
+#   tolerate an already-stopped core #1 — xsct raises "Already stopped" on a
+#     redundant 'stop', so any run that aborted while halted would otherwise
+#     poison every following run at line 4, before it can reset anything
 vitis-run: | $(BUILD_DIR)
 	@test -f "$(VIVADO_BIT)" || { echo "[VITIS] ERROR: no bitstream at $(VIVADO_BIT)"; exit 1; }
 	@test -n "$(strip $(VITIS_RUN_APP))" || { echo "[VITIS] ERROR: VITIS_RUN_APP is empty"; exit 1; }
+	@test -f "$(VITIS_RUN_ELF)" || { \
+	    echo "[VITIS] ERROR: no application ELF at $(VITIS_RUN_ELF)"; \
+	    echo "[VITIS] Run 'make vitis-apps' first."; \
+	    exit 1; \
+	}
 	@test -f "$(VITIS_PS_INIT)" || { \
 	    echo "[VITIS] ERROR: no PS init script at $(VITIS_PS_INIT)"; \
 	    echo "[VITIS] 'make xsa' copies it out of the build tree."; \
@@ -435,7 +463,7 @@ vitis-run: | $(BUILD_DIR)
 	echo "connect"; \
 	echo "after 3000"; \
 	echo 'targets -set -filter {name =~ "*Cortex-A9*#1"}'; \
-	echo "stop"; \
+	echo 'if { [catch { stop } msg] } { puts "core#1 stop skipped: $$msg" }'; \
 	echo 'targets -set -filter {name =~ "*Cortex-A9*#0"}'; \
 	echo "rst -processor"; \
 	echo "after 1000"; \
@@ -443,7 +471,7 @@ vitis-run: | $(BUILD_DIR)
 	echo "ps7_init"; \
 	echo "ps7_post_config"; \
 	echo "fpga -file $(abspath $(VIVADO_BIT))"; \
-	echo "dow $(abspath $(VITIS_WS))/$(VITIS_RUN_APP)/Debug/$(VITIS_RUN_APP).elf"; \
+	echo "dow $(abspath $(VITIS_RUN_ELF))"; \
 	echo "con"; \
 	) > $(VITIS_RUN_TCL)
 	@echo "[VITIS] Running $(VITIS_RUN_APP) on hardware..."
