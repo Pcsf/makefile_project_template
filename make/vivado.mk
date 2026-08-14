@@ -391,12 +391,70 @@ VITIS_LIBS     ?=
 # Like VITIS_LIBS, these are platform state -- changing them means regenerating.
 VITIS_BSP_CONFIG ?=
 
+# Source DIRECTORIES overlaid onto the platform's generated first-stage
+# bootloader, which is then rebuilt with them -- the supported way to hook it,
+# since the vendor ships a hooks file that exists to be replaced. Use it for a
+# boot arbiter, a hardware bring-up hook, anything that has to run before the
+# application does.
+#
+# WHY THIS EXISTS AT ALL: 'platform generate' writes the bootloader sources
+# fresh into the workspace, and the workspace is a build artefact. Editing the
+# generated hooks file in place works exactly until the next regeneration
+# silently reverts it -- and the failure mode is a board that boots the wrong
+# image, not a build error. So the hook lives in version control and the build
+# overlays it.
+#
+#   VITIS_BOOT_SRC := sw/boot_hooks sw/lib/flash sw/lib/bootstate
+#
+# Directories, listed the same way VITIS_APP_<app>_SRC is, with the files
+# discovered per directory rather than enumerated by hand. Headers come along
+# with sources: the bootloader compiles everything in its own directory, so a
+# copied .h is how an overlay carries its own interface.
+#
+# A directory containing an application entry point does not belong here -- the
+# bootloader has one already. Keep reusable modules in their own directories and
+# point at those.
+VITIS_BOOT_SRC ?=
+
+# Extensions an overlay copies: the C-family set scan_project.sh already
+# discovers, plus headers. Not VHDL -- an overlay targets a software project.
+VITIS_OVERLAY_EXTS ?= *.c *.cpp *.cxx *.cc *.s *.S *.asm *.h *.hpp *.hh
+
+# $(call vitis_overlay_files,<dir list>) -> every overlay-eligible file in them.
+vitis_overlay_files = \
+    $(foreach d,$(1),$(wildcard $(addprefix $(d)/,$(VITIS_OVERLAY_EXTS))))
+
 # Per-app Vitis template, e.g. VITIS_APP_echo_TEMPLATE := lwIP Echo Server.
 # Names are version-specific -- list them with 'repo -apps' in xsct. Likewise
 # 'repo -libs' for the VITIS_LIBS names above.
 VITIS_TEMPLATE ?= Empty Application(C)
 
 VITIS_PLATFORM_TCL := $(BUILD_DIR)/vitis_platform.tcl
+VITIS_BOOT_TCL     := $(BUILD_DIR)/vitis_boot.tcl
+
+# The boot component the platform generates, DISCOVERED rather than named --
+# because what it is called depends on the device. Vitis writes zynq_fsbl on
+# Zynq-7000, zynqmp_fsbl on ZynqMP, and a Versal platform generates a PLM
+# instead; the ELF inside is likewise family-specific. Naming any of them here
+# would bake a device family into a framework that is meant to outlive one.
+#
+# The glob is a variable so a device this list has not met yet can be handled
+# from project.mk instead of by patching the framework.
+VITIS_BOOT_DIR_GLOB ?= *fsbl* *plm*
+
+# Deferred assignment (=, not :=) on purpose: neither exists until
+# 'platform generate' has run.
+#
+# THE TRAP, learned by walking into it: deferred is still not late enough to use
+# these INSIDE the recipe that generates the platform. GNU make expands a whole
+# recipe before running its first line, so $(wildcard) there sees the directory
+# tree as it was BEFORE 'platform generate' -- and reports nothing. The overlay
+# step below therefore discovers the directory in the shell, at the moment it
+# needs it. These two are for OTHER targets, which run in a later recipe (a
+# boot-image rule, say) by which time the platform exists.
+VITIS_BOOT_DIR      = $(firstword $(wildcard \
+                          $(addprefix $(VITIS_WS)/$(VITIS_PLATFORM)/,$(VITIS_BOOT_DIR_GLOB))))
+VITIS_BOOT_ELF      = $(firstword $(wildcard $(VITIS_BOOT_DIR)/*.elf))
 VITIS_APPS_TCL     := $(BUILD_DIR)/vitis_apps.tcl
 VITIS_RUN_TCL      := $(BUILD_DIR)/vitis_run.tcl
 VITIS_PS_INIT      := $(BUILD_DIR)/ps7_init.tcl
@@ -437,6 +495,45 @@ vitis-platform: | $(BUILD_DIR)
 	$(if $(strip $(VITIS_BSP_CONFIG)),@echo "[VITIS] BSP config: $(VITIS_BSP_CONFIG)")
 	@echo "[VITIS] Building platform $(VITIS_PLATFORM)..."
 	$(XSCT) $(VITIS_PLATFORM_TCL)
+ifneq ($(strip $(VITIS_BOOT_SRC)),)
+	@$(foreach d,$(VITIS_BOOT_SRC), \
+	    test -d "$(d)" || { echo "[VITIS] ERROR: no such directory: $(d)"; exit 1; };)
+	@test -n "$(strip $(call vitis_overlay_files,$(VITIS_BOOT_SRC)))" || { \
+	    echo "[VITIS] ERROR: VITIS_BOOT_SRC matched no source files."; \
+	    echo "[VITIS]        Searched for: $(VITIS_OVERLAY_EXTS)"; \
+	    exit 1; \
+	}
+	@set -e; \
+	bootdir=$$(ls -d $(addprefix $(VITIS_WS)/$(VITIS_PLATFORM)/,$(VITIS_BOOT_DIR_GLOB)) \
+	           2>/dev/null | head -1); \
+	test -n "$$bootdir" || { \
+	    echo "[VITIS] ERROR: VITIS_BOOT_SRC is set, but this platform generated"; \
+	    echo "[VITIS]        no bootloader project under $(VITIS_WS)/$(VITIS_PLATFORM)."; \
+	    echo "[VITIS]        Looked for: $(VITIS_BOOT_DIR_GLOB)"; \
+	    echo "[VITIS] Only a platform whose domain builds one has anything to overlay."; \
+	    exit 1; \
+	}; \
+	echo "[VITIS] Overlaying bootloader sources into $$(basename $$bootdir):"; \
+	for f in $(call vitis_overlay_files,$(VITIS_BOOT_SRC)); do \
+	    echo "         $$f"; \
+	    cp -f "$$f" "$$bootdir/"; \
+	done
+	@echo "[VITIS] Rebuilding the bootloader with the overlay..."
+	@( \
+	echo "setws $(abspath $(VITIS_WS))"; \
+	echo "platform active $(VITIS_PLATFORM)"; \
+	echo "platform generate"; \
+	) > $(VITIS_BOOT_TCL)
+	$(XSCT) $(VITIS_BOOT_TCL)
+	@set -e; \
+	bootdir=$$(ls -d $(addprefix $(VITIS_WS)/$(VITIS_PLATFORM)/,$(VITIS_BOOT_DIR_GLOB)) \
+	           2>/dev/null | head -1); \
+	elf=$$(ls "$$bootdir"/*.elf 2>/dev/null | head -1); \
+	test -n "$$elf" || { \
+	    echo "[VITIS] ERROR: the bootloader produced no ELF after the overlay."; \
+	    echo "[VITIS]        Looked in $$bootdir"; exit 1; }; \
+	echo "[VITIS] Hooked bootloader: $$elf"
+endif
 
 # The xsct fragment that creates (when absent), overlays and builds ONE app.
 # Shared by vitis-apps, which does every app in VITIS_APPS, and by the ELF rule
@@ -453,18 +550,20 @@ vitis_app_tcl = \
 	echo '} else {'; \
 	echo '    app create -name $(1) -platform $(VITIS_PLATFORM) -domain $(VITIS_DOMAIN) -template {$(or $(VITIS_APP_$(1)_TEMPLATE),$(VITIS_TEMPLATE))}'; \
 	echo '}'; \
-	$(if $(strip $(VITIS_APP_$(1)_SRC)),\
-	    echo "importsources -name $(1) -path $(abspath $(VITIS_APP_$(1)_SRC))";) \
+	$(foreach d,$(VITIS_APP_$(1)_SRC),\
+	    echo "importsources -name $(1) -path $(abspath $(d))";) \
 	echo "app build -name $(1)";
 
 # Files whose modification makes an app's ELF stale: its version-controlled
-# overlay directory, if it has one. The workspace copy under $(VITIS_WS) is a
+# overlay directories, if it has any -- VITIS_APP_<app>_SRC is a list, so an app
+# can pull in shared module directories alongside its own. The workspace copy
+# under $(VITIS_WS) is a
 # build artefact -- importsources rewrites it on every build, so treating it as
 # a prerequisite would rebuild forever. An app built purely from a vendor
 # template therefore has no prerequisites and is built only when its ELF is
 # missing; to iterate on a template's own sources, copy the file you want to
 # change into the overlay directory, which is where edits belong anyway.
-vitis_app_srcs = $(if $(VITIS_APP_$(1)_SRC),$(shell find $(VITIS_APP_$(1)_SRC) -type f 2>/dev/null))
+vitis_app_srcs = $(foreach d,$(VITIS_APP_$(1)_SRC),$(shell find $(d) -type f 2>/dev/null))
 
 vitis-apps: | $(BUILD_DIR)
 	@test -n "$(strip $(VITIS_APPS))" || { echo "[VITIS] ERROR: VITIS_APPS is empty"; exit 1; }
