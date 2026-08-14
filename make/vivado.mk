@@ -682,6 +682,21 @@ vitis-run: $(if $(strip $(VITIS_RUN_APP)),$(VITIS_RUN_ELF)) | $(BUILD_DIR)
 # THE BOARD MUST BE IN JTAG BOOT MODE WHILE FLASHING. program_flash reaches the
 # QSPI through a helper FSBL it downloads over JTAG; if the board is set to boot
 # from the flash being written, it is booting out of the memory under the pen.
+# Which of the built images flash-boot actually WRITES. Defaults to all of them,
+# which is right for a project whose every image reaches the board through the
+# programmer.
+#
+# It is separate from BOOT_IMAGES because building an image and flashing it are
+# different decisions. An A/B update design has at least one image that is built
+# here and delivered some other way entirely -- over the network, by an updater
+# that verifies it before and after programming. Flashing such an image directly
+# is not a shortcut, it bypasses the mechanism the image exists to exercise, so
+# the framework lets a project build it without ever offering it to the pen.
+#
+#   BOOT_IMAGES       := golden update    both built
+#   BOOT_FLASH_IMAGES := golden           only this one written over JTAG
+BOOT_FLASH_IMAGES ?= $(BOOT_IMAGES)
+
 BOOTGEN          ?= $(dir $(XSCT))bootgen
 PROGRAM_FLASH    ?= $(dir $(XSCT))program_flash
 BOOT_IMAGES      ?=
@@ -722,14 +737,16 @@ boot-image: | $(BUILD_DIR)
 # Deliberately separate from boot-image: building an image is cheap and
 # repeatable, writing flash is neither.
 flash-boot:
-	@test -n "$(strip $(BOOT_IMAGES))" || { echo "[BOOT] ERROR: BOOT_IMAGES is empty"; exit 1; }
+	@test -n "$(strip $(BOOT_FLASH_IMAGES))" || { \
+	    echo "[BOOT] ERROR: BOOT_FLASH_IMAGES is empty (BOOT_IMAGES is '$(BOOT_IMAGES)')"; \
+	    exit 1; }
 	@test -f "$(BOOT_FSBL)" || { \
 	    echo "[BOOT] ERROR: no FSBL at $(BOOT_FSBL)"; \
 	    echo "[BOOT] program_flash downloads one over JTAG to drive the QSPI."; \
 	    echo "[BOOT] 'make vitis-platform' generates it; override BOOT_FSBL to change it."; \
 	    exit 1; \
 	}
-	@$(foreach i,$(BOOT_IMAGES), \
+	@$(foreach i,$(BOOT_FLASH_IMAGES), \
 	    test -f "$(call boot_image_bin,$(i))" || { \
 	        echo "[BOOT] ERROR: no image at $(call boot_image_bin,$(i)) — run 'make boot-image'"; exit 1; }; \
 	    test -n "$(BOOT_$(i)_OFFSET)" || { echo "[BOOT] ERROR: BOOT_$(i)_OFFSET is not set"; exit 1; }; \
