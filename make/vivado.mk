@@ -552,6 +552,98 @@ vitis-run: $(if $(strip $(VITIS_RUN_APP)),$(VITIS_RUN_ELF)) | $(BUILD_DIR)
 	@echo "[VITIS] Running $(VITIS_RUN_APP) on hardware..."
 	$(XSCT) $(VITIS_RUN_TCL)
 
+# ── Boot images: bootgen + program_flash (Zynq-7000) ──────────────────────────
+# The non-volatile path. Everything above this point puts things in volatile
+# memory — a bitstream in PL SRAM, an ELF in DDR — and vanishes on a power
+# cycle. These two targets are what survive it.
+#
+#   boot-image   build a BOOT.BIN from a .bif with bootgen
+#   flash-boot   write each BOOT.BIN into QSPI at its offset, with verification
+#
+# WHY bootgen AND NOT write_cfgmem
+#
+# write_cfgmem is the Vivado primitive for a plain FPGA that boots a raw
+# bitstream out of SPI flash. A Zynq-7000 does not do that: the BootROM loads a
+# BOOT.BIN boot image (FSBL + optional bitstream + application), which is what
+# bootgen builds from a .bif. write_cfgmem is still worth adding here one day as
+# the non-Zynq path; it is not this.
+#
+# Declare images in project.mk:
+#
+#   BOOT_IMAGES            := golden update
+#   BOOT_golden_BIF        := boot/arty/golden.bif
+#   BOOT_golden_OFFSET     := 0x000000
+#   BOOT_update_BIF        := boot/arty/update.bif
+#   BOOT_update_OFFSET     := 0x700000
+#
+# Paths inside a .bif are resolved relative to the directory make runs from,
+# i.e. the project root — so write them repo-root-relative and they behave the
+# same for everyone.
+#
+# THE BOARD MUST BE IN JTAG BOOT MODE WHILE FLASHING. program_flash reaches the
+# QSPI through a helper FSBL it downloads over JTAG; if the board is set to boot
+# from the flash being written, it is booting out of the memory under the pen.
+BOOTGEN          ?= $(dir $(XSCT))bootgen
+PROGRAM_FLASH    ?= $(dir $(XSCT))program_flash
+BOOT_IMAGES      ?=
+BOOT_DIR         ?= $(BUILD_DIR)/boot
+BOOT_ARCH        ?= zynq
+BOOT_FLASH_TYPE  ?= qspi_single
+# program_flash needs an FSBL to act as its flash writer. The platform's
+# generated one is the right default; override for a hooked FSBL.
+BOOT_FSBL        ?= $(VITIS_WS)/$(VITIS_PLATFORM)/zynq_fsbl/fsbl.elf
+BOOT_HW_URL      ?= TCP:127.0.0.1:3121
+
+boot_image_bin = $(BOOT_DIR)/$(1).bin
+
+.PHONY: boot-image flash-boot
+
+boot-image: | $(BUILD_DIR)
+	@test -n "$(strip $(BOOT_IMAGES))" || { \
+	    echo "[BOOT] ERROR: BOOT_IMAGES is empty."; \
+	    echo "[BOOT] Declare images in project.mk — see mk/make/vivado.mk."; \
+	    exit 1; \
+	}
+	@command -v $(BOOTGEN) >/dev/null 2>&1 || test -x "$(BOOTGEN)" || { \
+	    echo "[BOOT] ERROR: bootgen not found at '$(BOOTGEN)'"; \
+	    echo "[BOOT] It ships with Vitis; set BOOTGEN or XSCT to point at it."; \
+	    exit 1; \
+	}
+	@mkdir -p $(BOOT_DIR)
+	@$(foreach i,$(BOOT_IMAGES), \
+	    test -n "$(BOOT_$(i)_BIF)" || { echo "[BOOT] ERROR: BOOT_$(i)_BIF is not set"; exit 1; }; \
+	    test -f "$(BOOT_$(i)_BIF)" || { echo "[BOOT] ERROR: no .bif at $(BOOT_$(i)_BIF)"; exit 1; }; \
+	    echo "[BOOT] bootgen $(i): $(BOOT_$(i)_BIF) → $(call boot_image_bin,$(i))"; \
+	    $(BOOTGEN) -arch $(BOOT_ARCH) -image $(BOOT_$(i)_BIF) \
+	               -o $(abspath $(call boot_image_bin,$(i))) -w on || exit 1; \
+	)
+	@echo "[BOOT] Images:"
+	@ls -l $(BOOT_DIR)
+
+# Deliberately separate from boot-image: building an image is cheap and
+# repeatable, writing flash is neither.
+flash-boot:
+	@test -n "$(strip $(BOOT_IMAGES))" || { echo "[BOOT] ERROR: BOOT_IMAGES is empty"; exit 1; }
+	@test -f "$(BOOT_FSBL)" || { \
+	    echo "[BOOT] ERROR: no FSBL at $(BOOT_FSBL)"; \
+	    echo "[BOOT] program_flash downloads one over JTAG to drive the QSPI."; \
+	    echo "[BOOT] 'make vitis-platform' generates it; override BOOT_FSBL to change it."; \
+	    exit 1; \
+	}
+	@$(foreach i,$(BOOT_IMAGES), \
+	    test -f "$(call boot_image_bin,$(i))" || { \
+	        echo "[BOOT] ERROR: no image at $(call boot_image_bin,$(i)) — run 'make boot-image'"; exit 1; }; \
+	    test -n "$(BOOT_$(i)_OFFSET)" || { echo "[BOOT] ERROR: BOOT_$(i)_OFFSET is not set"; exit 1; }; \
+	    echo "[BOOT] program_flash $(i) → $(BOOT_$(i)_OFFSET)"; \
+	    $(PROGRAM_FLASH) -f $(abspath $(call boot_image_bin,$(i))) \
+	                     -offset $(BOOT_$(i)_OFFSET) \
+	                     -flash_type $(BOOT_FLASH_TYPE) \
+	                     -fsbl $(abspath $(BOOT_FSBL)) \
+	                     -verify \
+	                     -cable type xilinx_tcf url $(BOOT_HW_URL) || exit 1; \
+	)
+	@echo "[BOOT] All images written and verified."
+
 # ── Program device ────────────────────────────────────────────────────────────
 # Optional overrides:
 #   VIVADO_HW_SERVER  hw_server URL, e.g. localhost:3121. Empty = local server.
