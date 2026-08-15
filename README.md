@@ -21,10 +21,13 @@ removed within an existing directory.
 | `vivado` | VHDL, Verilog, SV + XDC | Xilinx Vivado |
 | `quartus` | VHDL, Verilog, SV | Intel/Altera Quartus Prime |
 
-**Not covered yet: non-volatile programming.** The framework builds a design and
-loads it over JTAG; it writes nothing to flash, on either vendor. Scoped in
-[`TODO.md`](TODO.md), which covers the whole matrix — Xilinx and Intel, SoC and
-non-SoC — because the SoC case is not the non-SoC case with extra steps.
+**Non-volatile programming is covered for one case only: the Xilinx SoC.**
+`boot-image` and `flash-boot` build a `BOOT.BIN` with `bootgen` and write it to
+QSPI with `program_flash` — the Zynq-7000 path, where the BootROM parses a boot
+image rather than loading a raw bitstream. The non-SoC case (`write_cfgmem`) and
+everything on the Intel side are still unimplemented and stay scoped in
+[`TODO.md`](TODO.md), which covers the whole matrix on purpose: the SoC case is
+not the non-SoC case with extra steps, and treating it as one is the trap.
 
 ---
 
@@ -185,6 +188,90 @@ src/
 
 ---
 
+## How it works
+
+The framework answers two questions — *what are the sources?* and *which tool
+consumes them?* — and deliberately nothing else. Everything else is split three
+ways, and that split is the whole architecture:
+
+| Layer | Lives in | Contains |
+|---|---|---|
+| **Data** | `project.mk` | the project's facts: name, toolchain, top, part, pins, IP, flags |
+| **Dispatch** | `Makefile` + `scripts/scan_project.sh` | source discovery, ordering, toolchain selection |
+| **Flow** | `make/<toolchain>.mk` + `scripts/*.tcl` | the recipes and Tcl that actually run the tools |
+
+The invariant that keeps this usable across projects: **nothing
+project-specific or device-family-specific goes inside the framework.** A
+project declares facts, the framework provides mechanism. The test before
+editing anything here is whether the line would be wrong in somebody else's
+project — a hardcoded `zynq_fsbl`, a hand-listed set of source files, a
+testbench's private log format. If it would, it belongs in `project.mk`, or it
+has to be discovered rather than named. `VITIS_BOOT_DIR_GLOB` and
+`XSIM_PASS_PATTERN` are both there because of this rule.
+
+### The include chain
+
+A consuming project's root `Makefile` is one line — `include mk/Makefile` —
+and control then runs through five steps in a fixed order:
+
+```
+mk/Makefile
+  1. TEMPLATE_DIR  := $(dir $(lastword $(MAKEFILE_LIST)))
+     └─ where the framework is, so it works as project root OR submodule.
+        TEMPLATE_EXCLUDE keeps the framework's own example/ out of discovery.
+  2. -include project.mk                      ← the project's data
+  3. C_SRCS := CXX_SRCS := VHDL_SRCS := …      ← simply-expanded, see below
+  4. include $(shell find … -name Makefile.mk) ← the discovered source lists
+     └─ none found? bootstrap: 'make scan' then 'make all'
+     └─ VHDL_SRCS_DIR set? rebuild VHDL_SRCS in the declared directory order
+  5. include make/$(TOOLCHAIN).mk              ← defines 'all' and the real flow
+     include make/common.mk                    ← scan / clean / info / help
+```
+
+Step 5 is why `make` means something different per toolchain without any
+conditional logic in the build: `all` is defined by whichever toolchain module
+was included. Under `ghdl` it is `simulate`; under `vivado` it is `bitstream`.
+
+### Why step 3 matters more than it looks
+
+Each generated fragment appends to those lists:
+
+```make
+C_SRCS += $(wildcard $(_THIS_DIR)*.c)
+```
+
+Because step 3 initialised the variables with `:=`, this `+=` expands its
+`$(wildcard …)` **immediately, at parse time, on every single `make`
+invocation**. That one detail is the source of the framework's central
+ergonomic claim, and its one real limitation:
+
+- Adding or deleting a file in an existing directory needs **no rescan** — the
+  next `make` already sees it.
+- Adding a new source **directory** needs `make scan`, because no fragment
+  exists there yet to be included.
+
+`make scan` is safe to re-run: fragments are rewritten only when their content
+would change, and a `.compile_order` is **never** overwritten once created, so
+hand-tuned VHDL ordering survives. See
+[How source discovery and VHDL ordering work](#how-source-discovery-and-vhdl-ordering-work)
+for the mechanics and [VHDL compilation order](#vhdl-compilation-order) for the
+three ordering layers.
+
+### Data is generated, flow is committed
+
+The Vivado module holds to the same split one level down. Make generates
+exactly one Tcl file — `build/vivado_params.tcl`, a flat `::p(...)` array of
+values — and the engine that reads it, `scripts/vivado_nonproject.tcl`, is
+committed and reviewable on its own. No recipe writes a build script it later
+sources, which is what makes a failed stage inspectable instead of
+archaeological. The same holds for the Vitis and boot targets: the `.tcl` fed
+to `xsct` is generated per invocation from declared variables, and the
+declaration is authoritative — `VITIS_DEFINES` clears the workspace's existing
+symbols before applying the project's, so deleting a line really does delete
+the symbol rather than leaving a working build of the wrong firmware.
+
+---
+
 ## Available make targets
 
 | Target | Description |
@@ -219,6 +306,23 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make asm` | `quartus` | Assembler — generate .sof |
 | `make sta` | `quartus` | Static timing analysis (full flow) |
 | `make program` | `vivado`, `quartus` | Program connected device |
+
+Bare-metal software on the exported platform, and the non-volatile path
+(Xilinx SoC). Kept as separate targets because the first is slow and rarely
+changes while the last runs constantly:
+
+| Target | Toolchain | Description |
+|---|---|---|
+| `make vitis-platform` | `vivado` | Create the hardware platform + BSP from the `.xsa`; overlay `VITIS_BOOT_SRC` onto the generated bootloader and rebuild it |
+| `make vitis-apps` | `vivado` | Create/import/build every app in `VITIS_APPS` |
+| `make vitis-run` | `vivado` | Reset, `ps7_init`, load the bitstream, download and run `VITIS_RUN_APP` |
+| `make boot-image` | `vivado` | Build each `BOOT_IMAGES` entry from its `.bif` with `bootgen` |
+| `make flash-boot` | `vivado` | Write each `BOOT_FLASH_IMAGES` entry into QSPI at its offset, with verification |
+
+`vitis-platform` is deliberately **not** idempotent: an existing platform is an
+error naming its own fix, because the reasons to re-run it — a changed `.xsa`,
+a changed `VITIS_LIBS` — are exactly the cases where silently reusing a stale
+one would be wrong.
 
 `FORCE=1` is required by `project` and `bd-draft` to overwrite an existing
 project — recreating one discards every IDE edit that has not been exported.
@@ -401,6 +505,61 @@ Two things that are easy to get wrong here, both learned by hitting them:
 - **Compilation order is the contract.** There is no `update_compile_order` to
   fall back on, so the order from `.compile_order` / `VHDL_SRCS_DIR` is what
   Vivado gets.
+
+### The simulation verdict — why `make sim` reads the transcript
+
+XSim's exit status is not a verdict, so `make sim` does not use it. Measured on
+2021.2:
+
+| Run | Transcript | `xsim -runall` exit |
+|---|---|---|
+| testbench passes | `Note: TEST COMPLETE` | **0** |
+| testbench fails (`severity failure`) | `Failure: TEST FAILED` | **0** |
+| testbench errors (`severity error`) | `Error: …`, run continues | **0** |
+| tool failure (missing snapshot) | `ERROR: Please check the snapshot name …` | 1 |
+
+A passing run and a run where every check failed are indistinguishable by exit
+status. Left unchecked, `make sim` reports success on a testbench that failed —
+a green build proving nothing, which is worse than a red one. GHDL has no such
+problem: it propagates `severity failure` into its exit status, so `ghdl.mk`
+needs none of this.
+
+The transcript is therefore the source of truth. `make sim` tees it to
+`$(XSIM_LOG)` and matches two patterns against it:
+
+```make
+XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(VIVADO_SIM_TOP).log
+XSIM_FAIL_PATTERN ?= ^(Error|Failure|Fatal):|^ERROR:   # any match fails the run
+XSIM_PASS_PATTERN ?=                                    # must appear, or the run fails
+XSIM_CHECK        ?= 1                                  # 0 skips the verdict
+```
+
+The default `XSIM_FAIL_PATTERN` is xsim's own rendering of VHDL severities, so
+any testbench using `assert`/`report` is covered without adopting a convention;
+the `ERROR:` alternative catches a tool-level failure, whose non-zero status the
+pipe to `tee` would otherwise swallow.
+
+`XSIM_PASS_PATTERN` is empty by default because a completion marker is a
+testbench convention and the framework cannot know it. **Declare one** —
+it is what catches the run that died quietly partway through, leaving no failing
+assert to match:
+
+```make
+# project.mk
+XSIM_PASS_PATTERN := TEST COMPLETE
+```
+
+`XSIM_CHECK=0` is for a run that is *expected* to fail — a TDD red phase, which
+asserts the inverse against the same transcript:
+
+```make
+red:
+	@$(MAKE) sim XSIM_CHECK=0 XELAB_FLAGS="$(XELAB_FLAGS) -generic_top G_RED=true"
+	@grep -q "TEST FAILED" $(XSIM_LOG) || { echo "stub did not fail"; exit 1; }
+```
+
+Pass it on the command line, not in `project.mk`: a project that sets it
+permanently has switched the check off.
 
 ### The project is for reading
 

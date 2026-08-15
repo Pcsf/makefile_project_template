@@ -163,6 +163,70 @@ XELAB_FLAGS    ?= -debug typical
 XSIM_DIR       := $(BUILD_DIR)/xsim
 XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
 
+# ── The simulation verdict ────────────────────────────────────────────────────
+# xsim's exit status is not a verdict, so the transcript is read instead.
+#
+# Measured on 2021.2, because this is the kind of claim that has to be measured:
+# a testbench ending in 'assert … severity failure' prints "Failure: <message>"
+# and exits 0. A clean run also exits 0. The two are indistinguishable by exit
+# status, which means an unchecked 'make sim' reports success on a run where
+# every check failed — and a green build that proves nothing is worse than a red
+# one. Only a TOOL-level failure exits non-zero (a missing snapshot gives
+# "ERROR: Please check the snapshot name …" and exit 1), and the pipe to tee
+# below would swallow that too, so it is matched in the transcript as well.
+#
+# The prefixes are xsim's own rendering of VHDL severities — 'Note:',
+# 'Warning:', 'Error:', 'Failure:' — so any testbench that uses assert/report
+# gets the default check for free, with no convention imposed on it.
+#
+#   XSIM_FAIL_PATTERN  extended regex; any match fails the run.
+#   XSIM_PASS_PATTERN  extended regex that MUST appear, or the run fails. Empty
+#                      by default: a completion marker is a testbench
+#                      convention, not something the framework can know. Declare
+#                      the project's own in project.mk, e.g.
+#                          XSIM_PASS_PATTERN := TEST COMPLETE
+#                      That is what catches a run which died quietly somewhere
+#                      before the end of the testbench — no failing assert to
+#                      match, just a transcript that stops early.
+#   XSIM_CHECK         0 skips the verdict, for a run that is EXPECTED to fail:
+#                      a TDD red phase asserts the inverse itself, against the
+#                      same transcript. Command line only — a project that
+#                      disables it permanently has switched the check off.
+#
+# Patterns are passed to grep -E inside single quotes; a pattern containing a
+# single quote will not survive.
+XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(VIVADO_SIM_TOP).log
+XSIM_FAIL_PATTERN ?= ^(Error|Failure|Fatal):|^ERROR:
+XSIM_PASS_PATTERN ?=
+XSIM_CHECK        ?= 1
+
+# An empty transcript is a failure in its own right: it means xsim never ran, or
+# died before printing anything, and neither pattern can speak to a file with
+# nothing in it.
+define _xsim_verdict
+	@log='$(abspath $(XSIM_LOG))'; \
+	if [ ! -s "$$log" ]; then \
+	    echo "[XSIM] FAILED — no transcript at $(XSIM_LOG); the simulation did not run."; \
+	    exit 1; \
+	fi; \
+	if grep -Eq '$(XSIM_FAIL_PATTERN)' "$$log"; then \
+	    echo "[XSIM] FAILED — transcript matched XSIM_FAIL_PATTERN:"; \
+	    grep -E '$(XSIM_FAIL_PATTERN)' "$$log" | head -20 | sed 's/^/[XSIM]     /'; \
+	    echo "[XSIM] Full transcript: $(XSIM_LOG)"; \
+	    exit 1; \
+	fi; \
+	$(if $(strip $(XSIM_PASS_PATTERN)),\
+	if ! grep -Eq '$(XSIM_PASS_PATTERN)' "$$log"; then \
+	    echo "[XSIM] FAILED — XSIM_PASS_PATTERN never appeared: $(XSIM_PASS_PATTERN)"; \
+	    echo "[XSIM] The run ended before the testbench reported completion."; \
+	    echo "[XSIM] Full transcript: $(XSIM_LOG)"; \
+	    exit 1; \
+	fi; ,\
+	echo "[XSIM] NOTE: XSIM_PASS_PATTERN is unset — a run that stops early still passes."; \
+	echo "[XSIM]       Declare the testbench's completion marker in project.mk."; ) \
+	echo "[XSIM] PASSED — transcript checked ($(XSIM_LOG))."
+endef
+
 # ── Derived source sets ───────────────────────────────────────────────────────
 _vivado_synth_vhdl = $(filter-out $(VIVADO_SIM_SRCS),$(VHDL_SRCS))
 _vivado_synth_v    = $(filter-out $(VIVADO_SIM_SRCS),$(V_SRCS))
@@ -353,10 +417,20 @@ sim-elab: | $(XSIM_DIR)
 	@echo "[XSIM] Elaborating $(VIVADO_SIM_TOP)..."
 	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) -s $(XSIM_SNAPSHOT) work.$(VIVADO_SIM_TOP)
 
+# Piped through tee so the run stays live on the console and still leaves the
+# transcript the verdict is read from. The pipe discards xsim's exit status,
+# which is the right trade only because nothing here trusted it in the first
+# place — see the verdict block above.
 sim: sim-elab
 	@echo "[XSIM] Running simulation (batch)..."
-	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -runall
+	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -runall 2>&1 | tee $(abspath $(XSIM_LOG))
+ifeq ($(XSIM_CHECK),0)
+	@echo "[XSIM] Verdict SKIPPED (XSIM_CHECK=0). Transcript: $(XSIM_LOG)"
+else
+	$(_xsim_verdict)
+endif
 
+# No verdict here: the GUI run is interactive and the operator is the check.
 sim-gui: sim-elab
 	@echo "[XSIM] Launching simulation GUI..."
 	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -gui
