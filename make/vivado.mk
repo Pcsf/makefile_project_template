@@ -429,6 +429,45 @@ vitis_overlay_files = \
 # 'repo -libs' for the VITIS_LIBS names above.
 VITIS_TEMPLATE ?= Empty Application(C)
 
+# Preprocessor symbols passed to the compiler, as bare names or NAME=VALUE:
+#
+#   VITIS_DEFINES              := BOARD_REV=2        # every app
+#   VITIS_APP_updater_DEFINES  := FAULT_HANG=1       # that app only
+#
+# Both lists apply, global first. Each becomes -D<symbol> through
+# 'app config define-compiler-symbols'.
+#
+# WHY THIS IS DECLARED AND NOT EDITED: the alternative is setting symbols in the
+# Vitis GUI or hand-editing the workspace .cproject, and the workspace is a build
+# artefact -- 'app create' and 'importsources' rewrite it. A symbol set there
+# survives exactly until the next clean build, and its failure mode is a binary
+# that behaves differently from the sources describing it. Same argument as
+# VITIS_BOOT_SRC above.
+#
+# The declared lists are AUTHORITATIVE: whatever symbols the workspace already
+# carries are removed before these are applied, so deleting a line here really
+# does delete the symbol on the next build instead of leaving it set. That
+# matters more than it looks -- a fault-injection or debug symbol left behind
+# produces a perfectly working build of the wrong firmware, silently.
+VITIS_DEFINES ?=
+
+# $(call vitis_app_defines,<app>) -> the symbols that app compiles with.
+vitis_app_defines = $(strip $(VITIS_DEFINES) $(VITIS_APP_$(1)_DEFINES))
+
+# The xsct fragment that makes the declared list authoritative for ONE app.
+# Clears whatever the workspace has, then applies ours. The read is wrapped in
+# catch because a freshly created app has no value to report, and the separator
+# Vitis uses for this parameter is not contracted in its documentation, so the
+# split tolerates each one it has been seen to produce.
+vitis_app_defines_tcl = \
+	echo 'if { [catch { set _d [app config -name $(1) define-compiler-symbols] } _e] } { set _d {} }'; \
+	echo 'foreach _s [split $$_d " ;,"] {'; \
+	echo '    if { $$_s ne {} } { catch { app config -name $(1) -remove define-compiler-symbols $$_s } }'; \
+	echo '}'; \
+	$(foreach s,$(call vitis_app_defines,$(1)),\
+	    echo 'app config -name $(1) -add define-compiler-symbols $(s)'; \
+	    echo 'puts {[VITIS] $(1): -D$(s)}';)
+
 VITIS_PLATFORM_TCL := $(BUILD_DIR)/vitis_platform.tcl
 VITIS_BOOT_TCL     := $(BUILD_DIR)/vitis_boot.tcl
 
@@ -552,6 +591,7 @@ vitis_app_tcl = \
 	echo '}'; \
 	$(foreach d,$(VITIS_APP_$(1)_SRC),\
 	    echo "importsources -name $(1) -path $(abspath $(d))";) \
+	$(call vitis_app_defines_tcl,$(1)) \
 	echo "app build -name $(1)";
 
 # Files whose modification makes an app's ELF stale: its version-controlled
