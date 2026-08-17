@@ -324,6 +324,21 @@ error naming its own fix, because the reasons to re-run it — a changed `.xsa`,
 a changed `VITIS_LIBS` — are exactly the cases where silently reusing a stale
 one would be wrong.
 
+**`BOOT_ARCH` has no default, and `boot-image` refuses without it.** `bootgen`
+does not check `-arch` against the `.bif`: given the wrong family it reports
+`Bootimage generated successfully`, exits 0, and writes an image carrying the
+other family's boot header, which the BootROM will not load. The failure
+surfaces as a board that does not come up, long after a build that passed. Set
+`BOOT_ARCH := zynq | zynqmp | versal` in `project.mk`.
+
+`flash-boot` stops a local `hw_server` before running `program_flash`, because
+`program_flash` attaches to one that is already listening instead of launching
+its own — and a server started by anything else (an `xsct` session, a chain
+probe, an open Hardware Manager) leaves the cable enumerated but the chain
+unopened, failing with `Given target do not exist`. Set
+`BOOT_HW_SERVER_RESET := 0` when `BOOT_HW_URL` points at a server you run
+deliberately.
+
 `FORCE=1` is required by `project` and `bd-draft` to overwrite an existing
 project — recreating one discards every IDE edit that has not been exported.
 
