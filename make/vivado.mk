@@ -815,7 +815,13 @@ BOOTGEN          ?= $(dir $(XSCT))bootgen
 PROGRAM_FLASH    ?= $(dir $(XSCT))program_flash
 BOOT_IMAGES      ?=
 BOOT_DIR         ?= $(BUILD_DIR)/boot
-BOOT_ARCH        ?= zynq
+# bootgen's -arch. DELIBERATELY HAS NO DEFAULT: it is a device-family fact, and
+# a wrong one fails silently. bootgen does not cross-check -arch against the
+# .bif -- it reports "Bootimage generated successfully" and exits 0 while
+# emitting an image with the other family's boot header, which the BootROM then
+# refuses. A default would make that the outcome of forgetting one line.
+# Declare it in project.mk: zynq | zynqmp | versal.
+BOOT_ARCH        ?=
 BOOT_FLASH_TYPE  ?= qspi_single
 # program_flash needs an FSBL to act as its flash writer. The platform's
 # generated one is the right default; override for a hooked FSBL.
@@ -850,6 +856,14 @@ boot-image: | $(BUILD_DIR)
 	@test -n "$(strip $(BOOT_IMAGES))" || { \
 	    echo "[BOOT] ERROR: BOOT_IMAGES is empty."; \
 	    echo "[BOOT] Declare images in project.mk — see mk/make/vivado.mk."; \
+	    exit 1; \
+	}
+	@test -n "$(strip $(BOOT_ARCH))" || { \
+	    echo "[BOOT] ERROR: BOOT_ARCH is not set."; \
+	    echo "[BOOT] bootgen needs the device family, and guessing it is worse"; \
+	    echo "[BOOT] than refusing: bootgen accepts a wrong -arch, exits 0, and"; \
+	    echo "[BOOT] writes an image the BootROM will not load."; \
+	    echo "[BOOT] Set it in project.mk:  BOOT_ARCH := zynq | zynqmp | versal"; \
 	    exit 1; \
 	}
 	@command -v $(BOOTGEN) >/dev/null 2>&1 || test -x "$(BOOTGEN)" || { \

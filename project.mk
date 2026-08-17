@@ -77,6 +77,32 @@ VIVADO_PART := xc7a35tcpg236-1   # Target device part number
 VIVADO_TOP  := top                # Top-level design unit
 VIVADO_XDC  :=                    # Constraints file(s), space-separated
 
+# ── Xilinx boot images (bootgen / program_flash) ──────────────────────────────
+# Only needed when the project produces a BOOT.BIN. Each BOOT_IMAGES entry names
+# a .bif and the flash offset it is written to. BOOT_FLASH_IMAGES is the subset
+# 'make flash-boot' writes over JTAG — normally just the recovery image, since
+# flashing a field-updatable one by accident is what this split prevents.
+#
+# BOOT_ARCH HAS NO DEFAULT, deliberately. bootgen does not check -arch against
+# the .bif: hand it the wrong family and it reports "Bootimage generated
+# successfully", exits 0, and writes an image the BootROM refuses. A default
+# would make that the cost of forgetting one line, so 'make boot-image' refuses
+# to run until this is set.
+#
+# BOOT_ARCH := zynq                 # zynq | zynqmp | versal
+#
+# BOOT_IMAGES        := golden update
+# BOOT_golden_BIF    := boot/golden.bif
+# BOOT_golden_OFFSET := 0x000000
+# BOOT_update_BIF    := boot/update.bif
+# BOOT_update_OFFSET := 0x700000
+# BOOT_FLASH_IMAGES  := golden
+#
+# BOOT_FLASH_TYPE      := qspi_single  # program_flash -flash_type
+# BOOT_FSBL            :=              # defaults to the platform's generated
+#                                      # boot ELF, discovered per device family
+# BOOT_HW_SERVER_RESET := 0            # keep a hw_server you run yourself
+
 # ── Intel/Altera Quartus Prime settings ───────────────────────────────────────
 QUARTUS_SH   := quartus_sh
 QUARTUS_MAP  := quartus_map
