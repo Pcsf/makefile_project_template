@@ -26,7 +26,7 @@ removed within an existing directory.
 QSPI with `program_flash` — the Zynq-7000 path, where the BootROM parses a boot
 image rather than loading a raw bitstream. The non-SoC case (`write_cfgmem`) and
 everything on the Intel side are still unimplemented and stay scoped in
-[`TODO.md`](TODO.md), which covers the whole matrix on purpose: the SoC case is
+[`TODO.md`](TODO.md), along with what the covered case taught: the SoC case is
 not the non-SoC case with extra steps, and treating it as one is the trap.
 
 ---
@@ -758,4 +758,5 @@ Alternatively, use [Git Bash](https://git-scm.com/downloads) or WSL and run
 
 ## License
 
-MIT — see [LICENSE](LICENSE) (add your own LICENSE file).
+Apache License 2.0 — see [LICENSE](LICENSE). The patent grant is deliberate:
+this framework drives builds that end up in shipped hardware.

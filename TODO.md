@@ -1,15 +1,17 @@
-# TODO — non-volatile programming
+# TODO — non-volatile programming, the three uncovered cases
 
-The framework can build a design and load it over JTAG. It cannot put anything
-into flash. That is the gap this file scopes.
+The framework covers one corner of non-volatile programming: the Xilinx SoC.
+`make boot-image` builds a `BOOT.BIN` with `bootgen`, `make flash-boot` writes it
+into QSPI with `program_flash`, and both are documented in `make/vivado.mk` and
+`README.md`. That path is implemented, proven on hardware, and out of scope here.
 
-Nothing here is implemented. Everything here is a design sketch plus the
-questions that have to be answered against the real tools before it can be.
+This file scopes what is left: **Xilinx non-SoC, Intel non-SoC, and Intel SoC.**
+None of them are implemented.
 
-> **The command syntax below is unverified.** It is written from documentation
-> and recollection, not from a run. This repo's convention is that a claim
-> carries the version it was proven on — none of these do yet. Treat every
-> snippet as a starting point to be confirmed, not as something to paste.
+> **The command syntax in the sketches below is unverified.** It is written from
+> documentation, not from a run. This repo's convention is that a claim carries
+> the version it was proven on — none of these do yet. Treat every snippet as a
+> starting point to be confirmed, not as something to paste.
 
 ## Why this matters
 
@@ -19,38 +21,40 @@ cycle, with no cable and no host. The framework should cover that last step for
 the same reason it covers the first — otherwise every project reinvents it, and
 each one gets it slightly wrong.
 
-## Scope: the matrix that has to be covered
+## Scope: what is left of the matrix
 
 Two axes, and they are not the same axis. Vendor decides the tools; **SoC or
 not** decides what a "flash image" even is.
 
 | | Non-SoC (fabric only) | SoC (hard processor) |
 |---|---|---|
-| **Xilinx / AMD** | 7-series, UltraScale(+) — flash holds a raw bitstream, loaded by the FPGA's own config engine | Zynq-7000, Zynq UltraScale+, Versal — flash holds a boot image the BootROM parses |
-| **Intel / Altera** | Cyclone, Arria, MAX 10 — flash (EPCQ/EPCS, or MAX 10 internal CFM) holds a converted bitstream | Cyclone V SoC, Arria 10 SoC, Agilex — HPS boots from a preloader/U-Boot chain; the fabric image is a separate `.rbf` |
+| **Xilinx / AMD** | **Open** — 7-series, UltraScale(+): flash holds a raw bitstream, loaded by the FPGA's own config engine | *Covered* — Zynq-7000, Zynq UltraScale+, Versal: `bootgen` + `program_flash` |
+| **Intel / Altera** | **Open** — Cyclone, Arria, MAX 10: flash (EPCQ/EPCS, or MAX 10 internal CFM) holds a converted bitstream | **Open** — Cyclone V SoC, Arria 10 SoC, Agilex: HPS boots a preloader/U-Boot chain; the fabric image is a separate `.rbf` |
 
-The non-SoC cases are close cousins: convert bitstream → flash image, then
-program through JTAG indirect. The SoC cases are genuinely different work per
-vendor, and the SoC image is not a bitstream at all — it is a boot image that
-*contains* one.
+The two non-SoC cases are close cousins: convert bitstream → flash image, then
+program through JTAG indirect. The Intel SoC case is different work again, and
+its image is not a bitstream at all — it is a boot chain that loads one.
 
-**This is the trap to avoid.** `write_cfgmem` looks like the general answer and
-is not. On a Zynq it is the wrong primitive: the BootROM does not load a raw
-bitstream from QSPI, it loads a `BOOT.BIN` built by `bootgen`. Any design that
-treats the SoC case as "non-SoC with extra steps" will be wrong.
+**The trap the covered corner already fell into, stated once so the remaining
+work does not repeat it.** `write_cfgmem` looks like the general answer and is
+not. On a Zynq it is the wrong primitive: the BootROM does not load a raw
+bitstream from QSPI. That is why `flash-boot` is not `write_cfgmem` with extra
+steps, and why the non-SoC targets below are new targets rather than a
+generalisation of the existing ones.
 
-## Proposed interface
+## Interface
 
-Two vendor-neutral targets, implemented differently in `vivado.mk` and
-`quartus.mk`. Consumers learn one thing.
+The SoC pair established the shape: **building an image and writing it are
+separate targets**, because building is cheap and repeatable and writing flash is
+neither. The non-SoC pair should keep that split and the same naming rhythm.
 
 ```
 make cfgmem     build the flash image from the build's own artefacts
 make flash      write that image to the attached device
 ```
 
-Same names on both vendors, same names SoC or not. What changes is which
-variables a project sets.
+Same two names on both vendors, so a consumer learns one thing. What changes is
+which variables a project sets.
 
 ### Non-SoC variables
 
@@ -63,18 +67,39 @@ FLASH_IMAGE     ?= $(BUILD_DIR)/$(TOP).mcs      # .mcs/.bin | .pof/.jic/.rbf
 FLASH_VERIFY    ?= 1
 ```
 
-### SoC variables
+Intel SoC needs its own set (preloader, `mkimage` U-Boot script, the A2
+partition scheme). Do not force it into either shape above.
 
-```make
-BOOT_BIF        ?=          # bootgen descriptor (Xilinx SoC)
-BOOT_ARCH       ?=          # zynq | zynqmp | versal
-BOOT_FSBL       ?=          # FSBL .elf — program_flash needs it as its writer
-BOOT_IMAGE      ?= $(BUILD_DIR)/BOOT.BIN
-FLASH_TYPE      ?= qspi_single
-```
+## Lessons the covered corner already paid for
 
-Intel SoC needs its own set (preloader, `mkimage` u-boot script, the A2
-partition scheme). Do not try to force it into the Xilinx shape.
+These came out of getting the SoC path working. They are not Zynq facts; they
+are framework facts, and the remaining three cases inherit them.
+
+- **A device-family fact gets no default.** `BOOT_ARCH` is required and
+  `boot-image` refuses without it, because `bootgen` accepts a wrong `-arch`,
+  exits 0, and emits an image the BootROM silently rejects. Any variable in the
+  sketches above with the same property — one where a wrong value produces a
+  plausible artefact rather than an error — must be required too, not defaulted.
+
+- **Discover, do not name.** The FSBL that drives the flash is resolved from
+  whatever the platform generated, not hardcoded to one family's directory name.
+  Same rule applies to Intel's preloader and to `get_cfgmem_parts`.
+
+- **Read-back verify is not optional.** `flash-boot` passes `-verify`
+  unconditionally. A flash write that reports success and produces a board that
+  will not boot is the worst failure this framework could ship. `FLASH_VERIFY`
+  exists as a variable above only because the Intel tools express verification
+  differently; on/off is not the choice being offered.
+
+- **Who owns the JTAG server is a real question, not a detail.** `program_flash`
+  must launch its own `hw_server`; attaching to one started by anything else
+  leaves the cable enumerated but the chain unopened. Expect the same class of
+  problem from `quartus_pgm` and from Vivado's hardware manager, and settle it
+  deliberately rather than discovering it on a bench.
+
+- **An offset-0 guard was considered and rejected.** A golden image legitimately
+  lives at offset 0; a guard there fights the primary use case. If protection is
+  wanted, it belongs in a project's own target, not the framework's.
 
 ## Per-target sketches (all unverified)
 
@@ -94,24 +119,13 @@ set_property PROGRAM.VERIFY 1
 program_hw_cfgmem [get_property PROGRAM.HW_CFGMEM $dev]
 ```
 
-Open questions: does the existing `program` target's arm_dap-skipping device
-pick still apply; whether `-loadbit` offsets need to be a variable for
-MultiBoot/golden-update layouts; how to enumerate valid `get_cfgmem_parts`
-without hardcoding one board.
+Closest to done of the three: it reuses the existing `program` target's Tcl
+scaffolding and its device pick, which already skips `arm_dap` to find the first
+programmable device.
 
-### Xilinx SoC — Zynq-7000 / Zynq UltraScale+
-
-```sh
-bootgen -arch zynq -image <x>.bif -o BOOT.BIN -w on
-program_flash -f BOOT.BIN -flash_type qspi_single -fsbl <fsbl>.elf \
-              -cable type xilinx_tcf
-```
-
-Open questions: `program_flash` lives in Vitis, not Vivado, so it needs the same
-explicit-path treatment `XSCT` already gets; whether to expose the SD-card path
-(where "flashing" is just copying `BOOT.BIN` to a FAT partition) as the same
-`flash` target or a separate one; how offsets are expressed for golden/update
-layouts, since `bootgen` and `program_flash` disagree about who owns them.
+Open questions: whether `-loadbit` offsets need to be a variable for
+MultiBoot/golden-update layouts, the way the SoC path exposes a per-image
+offset; how to enumerate valid `get_cfgmem_parts` without hardcoding one board.
 
 ### Intel non-SoC — Cyclone / Arria / MAX 10
 
@@ -123,42 +137,44 @@ quartus_cpf -c -o bitstream_compression=on <top>.sof <out>.rbf         # raw
 quartus_pgm -c <cable> -m jtag -o "p;<out>.jic"
 ```
 
-Open questions: `.pof` vs `.jic` vs `.rbf` is a real fork driven by how the
-board is wired (AS vs JTAG indirect vs HPS-loaded), so `FLASH_IMAGE`'s extension
+`quartus.mk` currently stops at `.sof` and a JTAG `program` target, so both new
+targets are additions rather than edits.
+
+Open questions: `.pof` vs `.jic` vs `.rbf` is a real fork driven by how the board
+is wired (AS vs JTAG indirect vs HPS-loaded), so `FLASH_IMAGE`'s extension
 probably has to drive the recipe; MAX 10 is its own case since the config flash
-is on-die; a `.cof` conversion file may be needed for anything non-trivial,
-which means generating one rather than passing flags.
+is on-die; a `.cof` conversion file may be needed for anything non-trivial, which
+means generating one rather than passing flags.
 
 ### Intel SoC — Cyclone V SoC / Arria 10 SoC
 
 Genuinely different: the HPS boots a preloader from a raw A2 partition, U-Boot
 comes next, and the fabric gets an `.rbf` loaded by U-Boot or by the HPS at
-runtime. `mkimage` builds the U-Boot script. Closer in spirit to the KV260's
-SD-card flow than to anything in the Xilinx QSPI path.
+runtime. `mkimage` builds the U-Boot script.
 
-Deliberately least-specified here — it needs real hardware to design against,
-and there is none in reach.
+Deliberately least-specified here — it needs real hardware to design against, and
+there is none in reach.
 
 ## Before any of this counts as done
 
 The repo's rule applies: a claim carries the version it was proven on.
 
 - Every command confirmed against the actual tool version, with the error text
-  recorded when it fails, the way `vivado.mk` already documents `DRC INBB-3`
-  and the `pre_synth` platform state.
-- **Read-back verify is not optional.** A flash write that reports success and
-  produces a board that will not boot is the worst failure this framework could
-  ship. `FLASH_VERIFY` defaults to on.
-- A guard against writing offset 0 when a working boot image lives there. On a
-  dev board that is the difference between a rebuild and a recovery exercise.
-- Confirmation on at least one non-SoC and one SoC target per vendor before
-  claiming the matrix is covered. Partial coverage gets documented as partial.
+  recorded where the reader will hit it: `DRC INBB-3` next to the code that
+  triggers it in `scripts/vivado_lib.tcl`, the `pre_synth` platform state in
+  `scripts/vivado_nonproject.tcl`, the `hw_server` ownership failure in
+  `make/vivado.mk`, and each of them again in `README.md`.
+- Read-back verify on by default, per the lesson above.
+- Confirmation on real hardware per case before claiming it is covered. Partial
+  coverage gets documented as partial — in `README.md`'s toolchain table, not
+  only here.
 
 ## Origin
 
-Raised 2026-08-13 while converting the Vivado flow to Non-Project Mode.
-Immediate driver was `tftp-field-update-basic` Phase 4, which needs the Zynq-7000
-path (`bootgen` + `program_flash`, descriptors already written in its
-`boot/arty/*.bif`). Parked deliberately: it does not block that project's
-Phase 3, and the framework deserves the whole matrix rather than the one corner
-a single project needs.
+Raised 2026-08-13 while converting the Vivado flow to Non-Project Mode, scoping
+the whole matrix on purpose rather than the one corner a consuming project
+needed at the time.
+
+Rewritten 2026-08-17, when the Xilinx SoC corner landed and this file still
+claimed the framework could not write flash at all. What that corner taught is
+recorded above; what it implemented is gone from here.
