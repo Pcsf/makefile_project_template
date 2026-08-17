@@ -17,7 +17,19 @@ SOF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).sof
 
 _ROOT_REL := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../../")
 
-.PHONY: all synth fit asm sta program
+.PHONY: all synth fit asm sta program _help_quartus
+
+# Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
+TOOLCHAIN_HELP_TARGET := _help_quartus
+
+_help_quartus:
+	@echo ""
+	@echo "  Quartus targets:"
+	@echo "    synth      Analysis & synthesis"
+	@echo "    fit        Fitter (place & route)"
+	@echo "    asm        Assembler — produces the .sof"
+	@echo "    sta        Timing analysis — this is what 'all' builds"
+	@echo "    program    Load the .sof into the device over JTAG"
 
 all: sta
 

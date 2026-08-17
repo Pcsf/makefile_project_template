@@ -3,7 +3,7 @@
 # Included by the root Makefile after toolchain-specific rules.
 # ==============================================================================
 
-.PHONY: scan clean distclean help info _help_text
+.PHONY: scan clean distclean help info _help_text _help_workflow
 
 # ── scan ──────────────────────────────────────────────────────────────────────
 # Re-run the scan script to pick up new source directories.
@@ -60,7 +60,20 @@ info:
 	@echo ""
 
 # ── help ──────────────────────────────────────────────────────────────────────
-help _help_text:
+#
+# Split so the selected toolchain can list its OWN targets between the core list
+# and the workflow notes. Each make/<toolchain>.mk sets TOOLCHAIN_HELP_TARGET to
+# a target it defines; one that sets nothing contributes nothing, and the
+# pre-scan bootstrap path — which includes this file with no toolchain module at
+# all — still gets the core list.
+#
+# A hook rather than a list of toolchain targets written out here: the whole
+# point of the split is that this file knows nothing about any particular
+# vendor, and a synth/program/flash target named in here would be wrong the
+# moment a toolchain without one is selected.
+help: _help_text $(TOOLCHAIN_HELP_TARGET) _help_workflow
+
+_help_text:
 	@echo ""
 	@echo "  Makefile Project Template"
 	@echo "  ════════════════════════════════════════════════════"
@@ -79,6 +92,8 @@ help _help_text:
 	@echo "    modelsim   ModelSim / QuestaSim HDL Simulator"
 	@echo "    vivado     Xilinx Vivado (synthesis + implementation)"
 	@echo "    quartus    Intel/Altera Quartus Prime"
+
+_help_workflow:
 	@echo ""
 	@echo "  Workflow:"
 	@echo "    1. Edit project.mk (set PROJECT_NAME, TOOLCHAIN, flags)"

@@ -232,6 +232,26 @@ Step 5 is why `make` means something different per toolchain without any
 conditional logic in the build: `all` is defined by whichever toolchain module
 was included. Under `ghdl` it is `simulate`; under `vivado` it is `bitstream`.
 
+The order within step 5 is also what lets a toolchain module contribute to
+`make help`. Set `TOOLCHAIN_HELP_TARGET` to a target the module defines, and
+`common.mk` runs it between the core target list and the workflow notes:
+
+```make
+.PHONY: _help_mytool
+TOOLCHAIN_HELP_TARGET := _help_mytool
+
+_help_mytool:
+	@echo ""
+	@echo "  MyTool targets:"
+	@echo "    program    Load the bitstream over JTAG"
+```
+
+Setting nothing is fine — `gcc` and `gxx` add no targets beyond `all`, so they
+set no hook and `make help` shows the core list alone. The same is true before
+the first `make scan`: the bootstrap path includes `common.mk` without any
+toolchain module, so a brand-new project's `make help` lists the core targets
+only until it has been scanned once.
+
 ### Why step 3 matters more than it looks
 
 Each generated fragment appends to those lists:
@@ -281,7 +301,7 @@ the symbol rather than leaving a working build of the wrong firmware.
 | `make clean` | Remove the `build/` directory |
 | `make distclean` | Remove `build/` **and** all generated `Makefile.mk` files |
 | `make info` | Show discovered sources and current settings |
-| `make help` | Print this target list |
+| `make help` | Print the core targets, then those of the selected toolchain |
 
 Toolchain-specific targets (available when the relevant toolchain is selected):
 
