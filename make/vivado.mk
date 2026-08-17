@@ -819,7 +819,12 @@ BOOT_ARCH        ?= zynq
 BOOT_FLASH_TYPE  ?= qspi_single
 # program_flash needs an FSBL to act as its flash writer. The platform's
 # generated one is the right default; override for a hooked FSBL.
-BOOT_FSBL        ?= $(VITIS_WS)/$(VITIS_PLATFORM)/zynq_fsbl/fsbl.elf
+#
+# DISCOVERED, not named: VITIS_BOOT_ELF resolves whatever the platform actually
+# generated -- zynq_fsbl/fsbl.elf, zynqmp_fsbl/fsbl.elf or a Versal PLM -- so
+# this default does not assume a device family. Deferred expansion, because the
+# platform does not exist until 'make vitis-platform' has run.
+BOOT_FSBL        ?= $(VITIS_BOOT_ELF)
 BOOT_HW_URL      ?= TCP:127.0.0.1:3121
 
 # program_flash must LAUNCH its own hw_server, not attach to a running one.
