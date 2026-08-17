@@ -822,6 +822,21 @@ BOOT_FLASH_TYPE  ?= qspi_single
 BOOT_FSBL        ?= $(VITIS_WS)/$(VITIS_PLATFORM)/zynq_fsbl/fsbl.elf
 BOOT_HW_URL      ?= TCP:127.0.0.1:3121
 
+# program_flash must LAUNCH its own hw_server, not attach to a running one.
+#
+# It attaches when something is already listening on BOOT_HW_URL, and an
+# hw_server started by anything else leaves the cable enumerated but the chain
+# unopened -- `jtag targets` shows the cable "(closed)" with no arm_dap or
+# device, and program_flash fails with "ERROR: Given target do not exist". The
+# working case is program_flash printing "Failed to connect to hw_server ...
+# Attempting to launch hw_server" and starting its own.
+#
+# Any prior JTAG contact in the same session causes this: an `xsct` invocation,
+# a `connect`, a chain probe, a Hardware Manager left open. Set to 0 when
+# BOOT_HW_URL points at a hw_server you deliberately run (a remote or shared
+# cable), since then attaching is the intent.
+BOOT_HW_SERVER_RESET ?= 1
+
 boot_image_bin = $(BOOT_DIR)/$(1).bin
 
 .PHONY: boot-image flash-boot
@@ -854,6 +869,30 @@ flash-boot:
 	@test -n "$(strip $(BOOT_FLASH_IMAGES))" || { \
 	    echo "[BOOT] ERROR: BOOT_FLASH_IMAGES is empty (BOOT_IMAGES is '$(BOOT_IMAGES)')"; \
 	    exit 1; }
+	@# Clear a stale local hw_server so program_flash starts its own -- see
+	@# BOOT_HW_SERVER_RESET above for why attaching to one breaks the target.
+	@if [ "$(BOOT_HW_SERVER_RESET)" = "1" ]; then \
+	    case "$(BOOT_HW_URL)" in \
+	    *127.0.0.1*|*localhost*) \
+	        pids=`pgrep -x hw_server 2>/dev/null`; \
+	        if [ -n "$$pids" ]; then \
+	            echo "[BOOT] a hw_server is already running (PID $$pids)."; \
+	            echo "[BOOT] program_flash would attach to it and fail with"; \
+	            echo "[BOOT] 'Given target do not exist'. Stopping it first."; \
+	            for p in $$pids; do kill $$p 2>/dev/null || true; done; \
+	            sleep 1; \
+	            still=`pgrep -x hw_server 2>/dev/null`; \
+	            if [ -n "$$still" ]; then \
+	                for p in $$still; do kill -9 $$p 2>/dev/null || true; done; \
+	                sleep 1; \
+	            fi; \
+	            if [ -n "`pgrep -x hw_server 2>/dev/null`" ]; then \
+	                echo "[BOOT] ERROR: hw_server still running; stop it and retry."; \
+	                exit 1; \
+	            fi; \
+	        fi ;; \
+	    esac; \
+	fi
 	@test -f "$(BOOT_FSBL)" || { \
 	    echo "[BOOT] ERROR: no FSBL at $(BOOT_FSBL)"; \
 	    echo "[BOOT] program_flash downloads one over JTAG to drive the QSPI."; \
