@@ -255,7 +255,39 @@ _vivado_cfg = $(if $(strip $(VIVADO_IP_$(1)_PRESET)),$(call _vivado_preset_dict,
 
 .PHONY: all params synth impl bitstream xsa \
         project project-gui gui bd-draft bd-gui bd-export \
-        sim sim-gui sim-elab vitis-platform vitis-apps vitis-run program
+        sim sim-gui sim-elab vitis-platform vitis-apps vitis-run program \
+        _help_vivado
+
+# Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
+TOOLCHAIN_HELP_TARGET := _help_vivado
+
+_help_vivado:
+	@echo ""
+	@echo "  Vivado targets:"
+	@echo "    synth          Synthesis only"
+	@echo "    impl           Implementation (place & route)"
+	@echo "    bitstream      Bitstream — this is what 'all' builds"
+	@echo "    xsa            Full flow, then export the .xsa hardware platform"
+	@echo "    params         Regenerate the build's TCL parameters"
+	@echo ""
+	@echo "    sim            Run the xsim testbench in batch"
+	@echo "    sim-elab       Elaborate the testbench without running it"
+	@echo "    sim-gui        Run the testbench in the xsim GUI"
+	@echo ""
+	@echo "    project        Build a browsable .xpr from the same sources"
+	@echo "    project-gui    Build that project and open it in the IDE"
+	@echo "    gui            Open the newest checkpoint in the IDE"
+	@echo "    bd-draft       Create the editable block-design project"
+	@echo "    bd-gui         Open the block design in the GUI"
+	@echo "    bd-export      Export the block design back to TCL"
+	@echo ""
+	@echo "    vitis-platform Build the Vitis platform from the .xsa"
+	@echo "    vitis-apps     Build the Vitis applications"
+	@echo "    vitis-run      Download and run VITIS_RUN_APP on the board"
+	@echo "    boot-image     Build the boot images named by BOOT_IMAGES"
+	@echo ""
+	@echo "    program        Load the bitstream into the FPGA over JTAG"
+	@echo "    flash-boot     Write the boot images into the board's flash"
 
 all: bitstream
 

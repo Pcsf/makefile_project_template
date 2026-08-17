@@ -16,7 +16,16 @@
 
 VSIM_WORKDIR := $(BUILD_DIR)/modelsim_work
 
-.PHONY: all compile simulate
+.PHONY: all compile simulate _help_modelsim
+
+# Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
+TOOLCHAIN_HELP_TARGET := _help_modelsim
+
+_help_modelsim:
+	@echo ""
+	@echo "  ModelSim targets:"
+	@echo "    compile    Compile the sources into the work library"
+	@echo "    simulate   Run VSIM_TOP — this is what 'all' builds"
 
 all: simulate
 

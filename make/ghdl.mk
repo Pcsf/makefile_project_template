@@ -22,7 +22,17 @@
 GHDL_WORKDIR := $(BUILD_DIR)/ghdl_work
 GHDL_FLAGS   += --std=$(GHDL_STD) --workdir=$(GHDL_WORKDIR)
 
-.PHONY: all analyze elaborate simulate
+.PHONY: all analyze elaborate simulate _help_ghdl
+
+# Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
+TOOLCHAIN_HELP_TARGET := _help_ghdl
+
+_help_ghdl:
+	@echo ""
+	@echo "  GHDL targets:"
+	@echo "    analyze    Analyse the VHDL sources"
+	@echo "    elaborate  Elaborate GHDL_TOP"
+	@echo "    simulate   Run the simulation — this is what 'all' builds"
 
 all: simulate
 
