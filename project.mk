@@ -123,6 +123,19 @@ QUARTUS_TOP  := top               # Top-level entity
 QUARTUS_FAMILY := "Cyclone IV E"
 QUARTUS_PGM  := quartus_pgm
 
+# VHDL standard for the Quartus toolchain. VHDL-2008 everywhere by default;
+# name the exceptions rather than lowering the default.
+# QUARTUS_VHDL_VERSION := VHDL_2008
+# QUARTUS_VHDL93       := hdl/legacy_wrapper.vhd
+
+# ── Constraints ───────────────────────────────────────────────────────────────
+# The QSF is regenerated every build, so constraints live in their own files.
+# QUARTUS_QSF_EXTRA contents are appended verbatim; QUARTUS_SDC files are added
+# as SDC_FILE assignments.
+#
+# QUARTUS_QSF_EXTRA := constraints/pins.qsf
+# QUARTUS_SDC       := constraints/timing.sdc
+
 # ── Platform Designer (Qsys) ──────────────────────────────────────────────────
 # Only needed when the design contains a Platform Designer system. Each entry is
 # a .qsys file; 'make qsys' generates its HDL under BUILD_DIR and the QSF picks
@@ -152,6 +165,14 @@ QUARTUS_PGM  := quartus_pgm
 #     hal.enable_small_c_library=true \
 #     hal.enable_reduced_device_drivers=true
 # NIOS_hello_CFLAGS  := -O2
+#
+# NIOS_MEM_INIT bakes an application into the FPGA image's on-chip memory,
+# inverting the build order so synthesis waits for the .elf. Needed whenever the
+# program cannot be downloaded over JTAG after configuration — no cable driver,
+# or a board expected to run standalone. The memory instance must itself be
+# declared with its "initialize memory content" parameter set, or the RAM
+# synthesises empty and the processor fetches zeros with nothing to warn you.
+# NIOS_MEM_INIT := hello
 #
 # NIOS2_SHELL — the nios2_command_shell.sh wrapper. Derived from
 # QUARTUS_ROOTDIR, which the Quartus environment exports. Set it only when the

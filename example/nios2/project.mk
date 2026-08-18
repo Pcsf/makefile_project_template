@@ -34,3 +34,8 @@ NIOS_hello_BSP_SETTINGS := \
     hal.enable_small_c_library=true \
     hal.enable_reduced_device_drivers=true \
     hal.enable_lightweight_device_driver_api=true
+
+# Bake the program into the FPGA image. The system's on-chip memory is declared
+# with initMemContent set, so without this the RAM synthesises empty and the
+# processor fetches zeros.
+NIOS_MEM_INIT := hello

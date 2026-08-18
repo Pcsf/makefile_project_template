@@ -595,6 +595,31 @@ wrapper in its command form. `NIOS2_SHELL` is derived from `QUARTUS_ROOTDIR`,
 which the Quartus environment exports; override it only when the tools live
 somewhere the derivation cannot reach.
 
+### Getting the program into the FPGA image
+
+`NIOS_MEM_INIT := <app>` bakes an application into the on-chip memory of the
+FPGA image, so the board runs the moment it is configured:
+
+```make
+NIOS_MEM_INIT := hello
+```
+
+This inverts the usual order — synthesis waits for the `.elf` — and one
+`make sta` from a clean tree runs qsys → BSP → application → memory init →
+synthesis → fit → assembler → STA.
+
+Needed whenever the program cannot arrive over a JTAG debug download after
+configuration: no cable driver for the board's programmer, or a board expected
+to run standalone.
+
+**The memory instance must also be declared with its "initialize memory
+content" parameter set.** With it clear, Platform Designer emits
+`init_file = "UNUSED"`, the RAM synthesises empty, and the processor fetches
+zeros. Nothing in the build complains — the `.hex` is generated, the QIP is
+added to the project, and the memory simply ignores both. Check the fitter
+report for the `.hex` filename against the RAM instance if a Nios II design
+builds cleanly and does nothing.
+
 ### Two things the framework will not guess
 
 **Which system an application runs on.** `NIOS_<app>_SOPCINFO` is derived only
