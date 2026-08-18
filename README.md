@@ -152,7 +152,8 @@ makefile_project_template/
 │   ├── ghdl.mk            ← GHDL VHDL simulation rules
 │   ├── modelsim.mk        ← ModelSim / QuestaSim rules
 │   ├── vivado.mk          ← Xilinx Vivado synthesis/implementation rules
-│   └── quartus.mk         ← Intel Quartus synthesis/fit/asm/STA rules
+│   └── quartus.mk         ← Intel Quartus synthesis/fit/asm/STA rules,
+│                             Platform Designer and Nios II
 ├── scripts/
 │   ├── scan_project.sh    ← Source-tree scanner (Linux / macOS / WSL)
 │   ├── scan_project.bat   ← Source-tree scanner (native Windows cmd)
@@ -325,6 +326,9 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make fit` | `quartus` | Fitter (place & route) |
 | `make asm` | `quartus` | Assembler — generate .sof |
 | `make sta` | `quartus` | Static timing analysis (full flow) |
+| `make qsys` | `quartus` | Generate HDL from every Platform Designer system |
+| `make nios-bsp` | `quartus` | Generate the board support package for each Nios II app |
+| `make nios-apps` | `quartus` | Build every Nios II application into an `.elf` |
 | `make program` | `vivado`, `quartus` | Program connected device |
 
 Bare-metal software on the exported platform, and the non-volatile path
@@ -395,6 +399,21 @@ endif
 V_SRCS    += $(wildcard $(_THIS_DIR)*.v   $(_THIS_DIR)*.sv)
 ASM_SRCS  += $(wildcard $(_THIS_DIR)*.s   $(_THIS_DIR)*.S   $(_THIS_DIR)*.asm)
 ```
+
+### Excluding a vendored sub-project
+
+A project that vendors a self-contained sub-project — one with its own
+`project.mk` and its own sources — must keep it out of the scan:
+
+```make
+SCAN_EXCLUDE := vendor/demo        # paths relative to SRC_ROOT, space-separated
+```
+
+Without it the scan sweeps that sub-project's sources into *this* build. The
+failure is not subtle for C (two `main`s, a link error) and is very subtle for
+HDL (an entity compiled into the wrong library). `SCAN_EXCLUDE` filters the
+scan, the sub-makefile discovery, and `distclean` alike, so a stale
+`Makefile.mk` left inside an excluded directory is ignored rather than included.
 
 ### Subsequent builds
 
@@ -469,6 +488,7 @@ This replaces what the per-directory `Makefile.mk` fragments accumulated, so
 PROJECT_NAME := my_project   # output binary name
 BUILD_DIR    := build        # build artefact directory
 TOOLCHAIN    := gcc          # see table above
+SCAN_EXCLUDE :=              # dirs the scan must skip, relative to SRC_ROOT
 
 # C / C++
 CC       := gcc
@@ -497,7 +517,113 @@ VIVADO_REPORTS            := 1        # utilization, timing, power, DRC, methodo
 QUARTUS_PART   := EP4CE6E22C8
 QUARTUS_FAMILY := "Cyclone IV E"
 QUARTUS_TOP    := top
+
+# Quartus — Platform Designer and Nios II (omit when the design has neither)
+QSYS_SYSTEMS       := system/my_system.qsys
+NIOS_APPS          := hello
+NIOS_hello_SRC_DIR := sw/hello
 ```
+
+---
+
+## Quartus — Platform Designer and Nios II
+
+Proven on Quartus Prime Lite 22.1std.0.915, Cyclone 10 LP, in the container
+described by `altera-dev-env`. A worked end-to-end example lives in
+`example/nios2/`: a Nios II/e, on-chip memory and a JTAG UART, all free IP, so
+it builds without an IP licence.
+
+### The contract
+
+A project declares its systems and its applications; the framework discovers
+everything else.
+
+```make
+QSYS_SYSTEMS       := system/my_system.qsys   # one entry per .qsys
+QSYS_LANG          := VERILOG                 # VERILOG | VHDL
+
+NIOS_APPS          := hello
+NIOS_hello_SRC_DIR := sw/hello
+```
+
+`make qsys` generates HDL, `make nios-bsp` the board support package, and
+`make nios-apps` the `.elf`. `make synth` depends on `qsys`, so a plain `make`
+does the right thing.
+
+### Generated output never touches the source tree
+
+Every artefact lands under `BUILD_DIR`:
+
+```
+build/qsys/<system>/<system>.qsys        staged copy
+build/qsys/<system>/<system>.sopcinfo    generated
+build/qsys/<system>/generated/…          generated HDL, and the .qip
+build/nios/<app>/bsp/                    board support package
+build/nios/<app>/app/<app>.elf           application
+```
+
+The staged copy is not tidiness. `qsys-generate` honours `--output-directory`
+for HDL but writes the `.sopcinfo` **next to the `.qsys` it was handed**, so
+generating in place drops a ~170 kB generated file into the source tree on
+every build. Generating from a copy under `BUILD_DIR` is what keeps `git status`
+clean.
+
+Generated HDL enters the Quartus project as a single `QIP_FILE`, not as
+enumerated sources. Platform Designer already emits a `.qip` listing every
+generated file in the right order and rewrites it whenever the system changes;
+enumerating that tree would be a hand-maintained list of files the tool owns.
+It is deliberately absent from `V_SRCS`/`VHDL_SRCS` — `make scan` does not look
+inside `BUILD_DIR`.
+
+### The tool-path trap
+
+Sourcing the Quartus environment puts `quartus/linux64` and the simulator on
+`PATH` **and nothing else**. `qsys-generate` lives under
+`quartus/sopc_builder/bin` and the Nios II SDK under `nios2eds/`; neither is
+added. A bare `qsys-generate` is "command not found" in a shell where
+`quartus_map` works fine.
+
+`nios2_command_shell.sh` is the vendor's answer, and it has a sharp edge:
+
+```sh
+nios2_command_shell.sh <command> [args…]   # runs the command with PATH set — correct
+source nios2_command_shell.sh              # execs an interactive bash — never returns
+```
+
+Every Platform Designer and Nios II invocation in `quartus.mk` goes through the
+wrapper in its command form. `NIOS2_SHELL` is derived from `QUARTUS_ROOTDIR`,
+which the Quartus environment exports; override it only when the tools live
+somewhere the derivation cannot reach.
+
+### Two things the framework will not guess
+
+**Which system an application runs on.** `NIOS_<app>_SOPCINFO` is derived only
+when exactly one `QSYS_SYSTEMS` entry is declared. With several it is required,
+because an application built against the wrong memory map links cleanly and
+then does not run — the same class of failure as a wrong `BOOT_ARCH`.
+
+**Whether the application fits.** A minimal system's on-chip memory is small and
+the full C library is not. `NIOS_<app>_BSP_SETTINGS` passes settings straight to
+`nios2-bsp`; `hal.enable_small_c_library=true` took the example's application
+from 22 kB of text to 2.5 kB. Without it a `printf` does not fit in 32 kB.
+
+### Building the example
+
+```sh
+cd example/nios2
+make scan          # first invocation only — see below
+make               # qsys → synthesis → fit → assembler → STA → .sof
+make nios-apps     # the application
+```
+
+`make scan` first because the bootstrap path that runs on a tree with no
+`Makefile.mk` files includes only the common targets, not the toolchain module —
+so `make qsys` on a fresh clone reports "No rule to make target". A bare `make`
+bootstraps and then builds, which is why the quick start does not mention this.
+
+`example/nios2/system/build_system.tcl` is what produced the committed `.qsys`.
+Keeping it beside the system means the design can be rebuilt or reviewed without
+opening the GUI.
 
 ---
 

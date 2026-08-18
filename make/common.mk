@@ -11,9 +11,9 @@
 # refreshes the source list on every make invocation — no rescan needed.
 scan:
 ifeq ($(HOST_OS),Windows)
-	@$(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
+	@$(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)") $(foreach d,$(SCAN_EXCLUDE),"$(d)")
 else
-	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)")
+	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)") $(foreach d,$(SCAN_EXCLUDE),"$(d)")
 endif
 	@echo "[INFO] Scan complete. Re-run 'make' to rebuild with any new sources."
 
@@ -35,6 +35,7 @@ else
 	    -not -path "*/templates/*" \
 	    -not -path "*/scripts/*" \
 	    $(TEMPLATE_FIND_EXCLUDE) \
+	    $(SCAN_FIND_EXCLUDE) \
 	    -delete
 endif
 	@echo "[DISTCLEAN] Done."
