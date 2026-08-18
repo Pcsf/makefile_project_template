@@ -329,6 +329,8 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make qsys` | `quartus` | Generate HDL from every Platform Designer system |
 | `make nios-bsp` | `quartus` | Generate the board support package for each Nios II app |
 | `make nios-apps` | `quartus` | Build every Nios II application into an `.elf` |
+| `make cfgmem` | `quartus` | Build the configuration-memory image from the `.sof` |
+| `make flash` | `quartus` | Write that image to the configuration device |
 | `make program` | `vivado`, `quartus` | Program connected device |
 
 Bare-metal software on the exported platform, and the non-volatile path
@@ -595,6 +597,39 @@ because the scan enumerates `.sv` files as `VERILOG_FILE` while the `.qip`
 correctly declares them `SYSTEMVERILOG_FILE`. Delete the stray generated
 directory and re-run `make scan`; or if a generated tree genuinely has to live
 in the source tree, name it in `SCAN_EXCLUDE`.
+
+### Configuration memory — `cfgmem` and `flash`
+
+Proven on Quartus Prime Lite 22.1std.0.915, a Cyclone 10 LP 10CL055 and an
+EPCQ16: written over JTAG indirect, then confirmed by power-cycling the board
+and watching it come up on the flashed design.
+
+```make
+FLASH_DEVICE      := EPCQ16      # required — see below
+FLASH_FORMAT      := jic         # jic | pof | rbf
+FLASH_COMPRESSION := on
+FLASH_VERIFY      := 1           # on by default
+```
+
+`make cfgmem` builds the image, `make flash` writes it. Two targets rather than
+one because building is cheap and repeatable and writing flash is neither — the
+same split the Xilinx `boot-image` / `flash-boot` pair uses.
+
+**The format follows how the device is reached, not preference.** A
+configuration device the FPGA boots from in Active Serial mode is written
+*through* the FPGA over JTAG, which is what `jic` means; `pof` addresses the
+configuration device directly; `rbf` is a raw bitstream for a loader that is not
+Quartus.
+
+**`FLASH_DEVICE` has no default, and `cfgmem` refuses without it.** `quartus_cpf`
+accepts a wrong configuration device, reports success, and writes an image the
+FPGA will not boot — the same failure mode that made `BOOT_ARCH` mandatory.
+
+**Compression is not an optimisation.** On the device this was proven against,
+one uncompressed image is 88% of the configuration memory and one compressed
+image is 25%. Any design wanting two images in one device needs it. The ratio
+depends on how full the device is and worsens as a design grows, so measure it
+rather than assume it.
 
 ### The tool-path trap
 

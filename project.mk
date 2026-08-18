@@ -136,6 +136,22 @@ QUARTUS_PGM  := quartus_pgm
 # QUARTUS_QSF_EXTRA := constraints/pins.qsf
 # QUARTUS_SDC       := constraints/timing.sdc
 
+# ── Configuration memory (quartus_cpf / quartus_pgm) ──────────────────────────
+# Only needed when the design is written to a configuration device. 'make cfgmem'
+# builds the image, 'make flash' writes it.
+#
+# FLASH_DEVICE HAS NO DEFAULT, deliberately. quartus_cpf accepts a wrong
+# configuration device, reports success, and writes an image the FPGA will not
+# boot — so 'make cfgmem' refuses until this is set.
+#
+# FLASH_DEVICE      := EPCQ16
+# FLASH_FORMAT      := jic          # jic (JTAG indirect) | pof (direct) | rbf
+# FLASH_COMPRESSION := on           # often required, not an optimisation:
+#                                   # an uncompressed image can be most of a
+#                                   # small configuration device
+# FLASH_VERIFY      := 1            # read-back verify; on by default
+# FLASH_IMAGE       :=              # defaults to the build's own output
+
 # ── Platform Designer (Qsys) ──────────────────────────────────────────────────
 # Only needed when the design contains a Platform Designer system. Each entry is
 # a .qsys file; 'make qsys' generates its HDL under BUILD_DIR and the QSF picks
