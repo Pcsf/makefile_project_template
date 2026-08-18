@@ -122,6 +122,19 @@ endef
 # environment variable QSYS_IP_SEARCH_PATH is NOT an alternative: it is ignored.
 QSYS_SEARCH_PATH ?=
 
+# Platform Designer COPIES a component's HDL into the generated tree when it
+# generates, so a component whose source changed is not rebuilt by editing that
+# source: the .qip is still newer than the .qsys and make has nothing to do. The
+# design then synthesises the stale copy and the board runs code that is not in
+# the repository, which looks exactly like a design that does not work.
+#
+# The component's _hw.tcl files are found automatically. The HDL they point at
+# cannot be — a _hw.tcl may reference any path — so a project with its own
+# components adds those sources here.
+QSYS_DEPS ?=
+_QSYS_DEPS := $(QSYS_DEPS) \
+              $(foreach d,$(QSYS_SEARCH_PATH),$(wildcard $(d)/*_hw.tcl))
+
 QSYS_LANG ?= VERILOG
 QSYS_DIR  := $(BUILD_DIR)/qsys
 
@@ -136,7 +149,7 @@ QSYS_QIPS := $(foreach q,$(QSYS_SYSTEMS),$(call _qsys_qip,$(q)))
 # One rule per declared system. The .qip is the target because it is what the
 # QSF consumes; the .sopcinfo lands beside the staged copy in the same run.
 define _qsys_rule
-$(call _qsys_qip,$(1)): $(1)
+$(call _qsys_qip,$(1)): $(1) $$(_QSYS_DEPS)
 	@echo "[QSYS] Generating $(call _qsys_name,$(1))..."
 	$$(call _require_nios2_shell)
 	@$(MKDIR) $(dir $(call _qsys_staged,$(1)))
