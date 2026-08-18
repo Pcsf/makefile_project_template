@@ -112,16 +112,15 @@ endef
 # staged copy keeps every artefact under BUILD_DIR.
 # QSYS_SEARCH_PATH lists directories holding a project's own _hw.tcl components.
 # Platform Designer sees only the vendor library otherwise, and a system that
-# instantiates a project component fails to generate with the component reported
-# as unknown.
+# instantiates a project component fails with "Component type ... is not in the
+# library" — a warning, followed by a generation that reports progress and
+# writes a stub with no ports.
 #
-# Passed through the environment rather than as --search-path, which requires a
-# trailing '$' to keep the standard library. That '$' has to survive a define,
-# an $(eval) and the shell, and every escaping of it either becomes the shell's
-# process id or is eaten and leaves a quote open. The environment form appends
-# to the standard path instead of replacing it, so there is nothing to escape.
+# The invocation goes through scripts/qsys_generate.sh because --search-path
+# must end in a literal '$' to keep the standard library, and that character
+# cannot be carried through a define, an $(eval) and a shell reliably. The
+# environment variable QSYS_IP_SEARCH_PATH is NOT an alternative: it is ignored.
 QSYS_SEARCH_PATH ?=
-_qsys_env = $(if $(QSYS_SEARCH_PATH),QSYS_IP_SEARCH_PATH="$(subst $(space),:,$(foreach d,$(QSYS_SEARCH_PATH),$(abspath $(d))))")
 
 QSYS_LANG ?= VERILOG
 QSYS_DIR  := $(BUILD_DIR)/qsys
@@ -142,10 +141,9 @@ $(call _qsys_qip,$(1)): $(1)
 	$$(call _require_nios2_shell)
 	@$(MKDIR) $(dir $(call _qsys_staged,$(1)))
 	@cp $(1) $(call _qsys_staged,$(1))
-	@$(_qsys_env) "$(NIOS2_SHELL)" qsys-generate $(call _qsys_staged,$(1)) \
-	    --synthesis=$(QSYS_LANG) \
-	    --output-directory=$(call _qsys_gen,$(1)) \
-	    --part=$(QUARTUS_PART)
+	@bash $(TEMPLATE_DIR)scripts/qsys_generate.sh "$(NIOS2_SHELL)" \
+	    $(call _qsys_staged,$(1)) $(QSYS_LANG) $(QUARTUS_PART) \
+	    $(call _qsys_gen,$(1)) $(foreach d,$(QSYS_SEARCH_PATH),$(abspath $(d)))
 endef
 $(foreach q,$(QSYS_SYSTEMS),$(eval $(call _qsys_rule,$(q))))
 
