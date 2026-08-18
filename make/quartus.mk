@@ -135,6 +135,16 @@ QSYS_DEPS ?=
 _QSYS_DEPS := $(QSYS_DEPS) \
               $(foreach d,$(QSYS_SEARCH_PATH),$(wildcard $(d)/*_hw.tcl))
 
+# A .qsys may be authored by hand or built from a script. Naming the script
+# makes it the source of record: the .qsys becomes a build product that is
+# rebuilt when the script changes, rather than a file that silently stops
+# matching the script it came from.
+#
+#   QSYS_<system>_SCRIPT := system/build_system.tcl
+#
+# The script's own save_system decides the file name, which must match the
+# QSYS_SYSTEMS entry.
+
 QSYS_LANG ?= VERILOG
 QSYS_DIR  := $(BUILD_DIR)/qsys
 
@@ -148,6 +158,18 @@ QSYS_QIPS := $(foreach q,$(QSYS_SYSTEMS),$(call _qsys_qip,$(q)))
 
 # One rule per declared system. The .qip is the target because it is what the
 # QSF consumes; the .sopcinfo lands beside the staged copy in the same run.
+# Building the .qsys from its script, when one is declared.
+define _qsys_script_rule
+$(1): $(2)
+	@echo "[QSYS] Building $$(notdir $(1)) from $$(notdir $(2))..."
+	$$(call _require_nios2_shell)
+	@bash $(TEMPLATE_DIR)scripts/qsys_script.sh "$$(NIOS2_SHELL)" $(2) $$(dir $(1)) \
+	    $$(foreach d,$$(QSYS_SEARCH_PATH),$$(abspath $$(d)))
+endef
+$(foreach q,$(QSYS_SYSTEMS),\
+    $(if $(QSYS_$(call _qsys_name,$(q))_SCRIPT),\
+        $(eval $(call _qsys_script_rule,$(q),$(QSYS_$(call _qsys_name,$(q))_SCRIPT)))))
+
 define _qsys_rule
 $(call _qsys_qip,$(1)): $(1) $$(_QSYS_DEPS)
 	@echo "[QSYS] Generating $(call _qsys_name,$(1))..."
