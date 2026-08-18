@@ -708,6 +708,109 @@ opening the GUI.
 
 ---
 
+## Quartus — Nios V
+
+Nios V sits beside Nios II rather than replacing it. Everything core-agnostic is
+shared — Platform Designer generation, constraints, the VHDL standard handling,
+the flash targets, the scan guards. The software half is a separate
+implementation, because almost nothing about it is the same:
+
+| Step | Nios II | Nios V |
+|---|---|---|
+| BSP | `nios2-bsp` | `niosv-bsp --create` |
+| Application | generated makefile, `make -C` | `niosv-app` emits a `CMakeLists.txt`, built with CMake |
+| Memory init | the BSP's `mem_init_generate` target | `elf2hex`, run by the framework |
+| Extra flags | `--set APP_CFLAGS_USER_FLAGS` | a BSP setting — the toolchain file governs the app too |
+
+### The contract
+
+```make
+NIOSV_APPS           := hello
+NIOSV_hello_SRC_DIR  := sw/hello
+NIOSV_hello_BSP_SETTINGS := hal.make.cflags_user_flags=-march=rv32ia_zicsr
+NIOSV_MEM_INIT       := hello
+NIOSV_MEM_INIT_HEX   := my_ram.hex
+NIOSV_MEM_INIT_BASE  := 0x0
+NIOSV_MEM_INIT_END   := 0x7FFF
+```
+
+`make niosv-bsp` generates the BSP, `make niosv-apps` builds each application,
+and a declared `NIOSV_MEM_INIT` puts the program into the FPGA image so `make`
+alone produces a `.sof` that runs. Every variable is listed with a commented
+example in `project.mk`.
+
+### Three things that are not in any installer
+
+**A RISC-V toolchain.** No Intel installer ships one. The BSP writes
+`riscv32-unknown-elf-gcc` into its own generated `toolchain.cmake` with a plain
+`set()`, which shadows any CMake cache override, so a toolchain reachable under
+a different name will not be used — provide that exact prefix, or set `NIOSV_CC`.
+`niosv-shell` looks for Intel's RiscFree under `$ACDS_ROOT/riscfree`, and when
+it is absent prints an INFO line and carries on, so the failure surfaces much
+later as a missing compiler inside a generated CMake build. Proven here against
+xPack `riscv-none-elf-gcc` 12.5.0-1, symlinked to that prefix; `rv32ia/ilp32` is
+an exact multilib in it and newlib is present.
+
+**CMake.** The application build is CMake, not a generated makefile.
+
+**A licence, on some editions.** The Nios V/m IP is licensed (FlexLM feature
+`6AF7_D036`) and, unlike Triple-Speed Ethernet, supports no evaluation mode.
+Without a licence the design synthesises and fits, then `quartus_asm` reports
+"successful, 0 errors" and writes no programming file at all. Check
+`output_files/` for the `.sof` rather than trusting the exit status.
+
+### The `zicsr` trap
+
+binutils 2.38 moved the CSR instructions out of the base RISC-V `I` extension.
+The processor IP hardcodes `-march=rv32ia` as a module software property, and
+the BSP's own `crt0.S` writes `csrw mtvec,t0` against it, so under any binutils
+at or past that release the BSP fails to assemble:
+
+```
+crt0.S:134: Error: unrecognized opcode `csrw mtvec,t0', extension `zicsr' required
+```
+
+The fix is a supported BSP setting, not a patched file:
+`hal.make.cflags_user_flags=-march=rv32ia_zicsr`. It is emitted after the
+hardcoded `-march` in the generated `add_compile_options`, and the compiler
+takes the last one. `rv32ia` is a 32-register core; a 16-register one is
+`rv32ea`.
+
+### `LD_LIBRARY_PATH` has to be cleared
+
+Quartus's bundled `libstdc++` shadows the system one once its environment has
+been sourced, so CMake dies on a missing `GLIBCXX_3.4.30` before it ever reaches
+the compiler. The framework clears it for the CMake and make invocations. The
+rule is not "CMake needs this" — it is anything outside `quartus/linux64`.
+
+### Memory initialisation
+
+A Nios V BSP has no `mem_init_generate`, so the framework runs `elf2hex` itself.
+The contract is the on-chip memory's `initializationFileName` in the Platform
+Designer system: the memory is synthesised from a file of that name, and
+`NIOSV_MEM_INIT_HEX` has to match it. Declare the memory with
+`useNonDefaultInitFile` set, or the tool picks its own name and the two disagree
+in silence.
+
+None of the name, base or end gets a default. Each builds a plausible artefact
+when wrong: a mismatched name synthesises an empty RAM and the processor fetches
+zeros, a wrong range truncates the image, and nothing in the build complains.
+Confirm it landed by looking in the fitter report's RAM Summary for the `.hex`
+against the memory instance — the same check the Nios II flow needs.
+
+### Building the example
+
+```sh
+cd example/niosv
+make scan
+make               # qsys → BSP → app → elf2hex → synthesis → … → .sof
+```
+
+Proven on Quartus Prime Lite 22.1std.0.915 with xPack `riscv-none-elf-gcc`
+12.5.0-1 and CMake 3.22.1, against a 10CL025YU256C8G.
+
+---
+
 ## Vivado build flow — Non-Project Mode
 
 The build is **Non-Project Mode**: sources are read, implemented and exported

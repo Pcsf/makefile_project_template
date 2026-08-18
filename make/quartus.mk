@@ -3,6 +3,7 @@
 # Handles: VHDL / Verilog / SV → synthesis → fit → assembly → STA → .sof
 #          Platform Designer systems → generated HDL → the Quartus project
 #          Nios II BSP + applications → .elf
+#          Nios V BSP + applications → .elf
 #
 # ── Compilation order strategy ────────────────────────────────────────────────
 # Quartus's analysis & synthesis (quartus_map) reads all sources specified in
@@ -57,6 +58,22 @@ QUARTUS_VHDL93       ?=
 NIOS_MEM_INIT ?=
 NIOS_DIR      := $(BUILD_DIR)/nios
 NIOS_MEM_INIT_QIP = $(if $(NIOS_MEM_INIT),$(NIOS_DIR)/$(NIOS_MEM_INIT)/app/mem_init/meminit.qip)
+
+# Nios V has no BSP-generated equivalent, so the same idea is spelled out: the
+# memory is synthesised from a file whose NAME is fixed in the Platform Designer
+# system (initializationFileName), and elf2hex has to produce a file of that
+# name where Quartus looks for it — the Quartus project directory.
+#
+# None of the four facts gets a default. Every one of them produces a plausible
+# artefact when wrong: a mismatched name synthesises an empty RAM, a wrong base
+# or end silently truncates the image, and nothing in the build complains.
+NIOSV_MEM_INIT       ?=
+NIOSV_MEM_INIT_HEX   ?=
+NIOSV_MEM_INIT_BASE  ?=
+NIOSV_MEM_INIT_END   ?=
+NIOSV_MEM_INIT_WIDTH ?= 32
+NIOSV_DIR            := $(BUILD_DIR)/niosv
+NIOSV_MEM_INIT_HEX_PATH = $(if $(NIOSV_MEM_INIT),$(QUARTUS_PROJDIR)/$(NIOSV_MEM_INIT_HEX))
 
 # ── Platform Designer and Nios II tool location ──────────────────────────────
 # Sourcing the Quartus environment puts quartus/linux64 and the simulator on
@@ -137,7 +154,8 @@ SOF_FILE        := $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).sof
 # slash, or the first QSF written differs from every later one.
 _ROOT_REL := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../..")
 
-.PHONY: all synth fit asm sta program cfgmem flash qsys nios-bsp nios-apps _help_quartus
+.PHONY: all synth fit asm sta program cfgmem flash qsys nios-bsp nios-apps \
+        niosv-bsp niosv-apps _help_quartus
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_quartus
@@ -155,6 +173,8 @@ _help_quartus:
 	@echo "    qsys       Generate HDL from every QSYS_SYSTEMS entry"
 	@echo "    nios-bsp   Generate the board support package for each Nios II app"
 	@echo "    nios-apps  Build every NIOS_APPS entry into an .elf"
+	@echo "    niosv-bsp  Generate the board support package for each Nios V app"
+	@echo "    niosv-apps Build every NIOSV_APPS entry into an .elf"
 
 all: sta
 
@@ -184,7 +204,7 @@ $(QPF_FILE): | $(QUARTUS_PROJDIR)
 	echo "PROJECT_REVISION = \"$(PROJECT_NAME)\""; \
 	) > $@
 
-$(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QUARTUS_QSF_EXTRA) $(QUARTUS_SDC) $(QPF_FILE)
+$(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(NIOSV_MEM_INIT_HEX_PATH) $(QUARTUS_QSF_EXTRA) $(QUARTUS_SDC) $(QPF_FILE)
 	@echo "[QUARTUS] Generating settings file: $(QSF_FILE)"
 	@( \
 	echo "set_global_assignment -name FAMILY \"$(patsubst \"%\",%,$(QUARTUS_FAMILY))\""; \
@@ -241,7 +261,7 @@ endef
 # NOT given --source: that flag adds a DESIGN file, so handing it the settings
 # file makes Quartus try to elaborate the .qsf and report the real top level as
 # undefined. Nor --part: the device belongs in one place, and that is the .qsf.
-synth: $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QSF_FILE)
+synth: $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(NIOSV_MEM_INIT_HEX_PATH) $(QSF_FILE)
 	$(call _check_scanned_ip)
 	@echo "[QUARTUS] Analysis and synthesis..."
 	$(QUARTUS_MAP) --read_settings_files=on --write_settings_files=off \
@@ -362,14 +382,28 @@ _nios_bsp_lib = $(call _nios_bsp_dir,$(1))/libhal_bsp.a
 # A single declared system is unambiguous, so the .sopcinfo is derived from it.
 # With several, the project must say which one an application runs on — guessing
 # would silently build against the wrong memory map.
-_nios_sopcinfo = $(if $(NIOS_$(1)_SOPCINFO),$(NIOS_$(1)_SOPCINFO),\
-    $(if $(filter 1,$(words $(QSYS_SYSTEMS))),$(call _qsys_spc,$(firstword $(QSYS_SYSTEMS)))))
+_nios_sopcinfo = $(strip $(if $(NIOS_$(1)_SOPCINFO),$(NIOS_$(1)_SOPCINFO),\
+    $(if $(filter 1,$(words $(QSYS_SYSTEMS))),$(call _qsys_spc,$(firstword $(QSYS_SYSTEMS))))))
+
+# A settings pair splits on its FIRST '=' only. Splitting on every one breaks
+# any value that contains an equals sign, which BSP compiler-flag settings do —
+# hal.make.cflags_user_flags=-march=rv32ia_zicsr would arrive as the value
+# "-march" with the rest silently dropped.
+_kv_name  = $(firstword $(subst =, ,$(1)))
+_kv_value = $(patsubst $(call _kv_name,$(1))=%,%,$(1))
+
+# The .sopcinfo is produced as a side effect of generating a system, whose rule
+# has the .qip as its target. A BSP must therefore depend on the .qip; naming
+# the .sopcinfo leaves make with no rule for it and the build stops before it
+# has generated anything.
+_qsys_dep_for = $(strip $(if $(1),$(1),\
+    $(if $(filter 1,$(words $(QSYS_SYSTEMS))),$(call _qsys_qip,$(firstword $(QSYS_SYSTEMS))))))
 
 NIOS_ELFS := $(foreach a,$(NIOS_APPS),$(call _nios_elf,$(a)))
 NIOS_BSPS := $(foreach a,$(NIOS_APPS),$(call _nios_bsp_dir,$(a))/settings.bsp)
 
 define _nios_rule
-$(call _nios_bsp_dir,$(1))/settings.bsp: $(call _nios_sopcinfo,$(1))
+$(call _nios_bsp_dir,$(1))/settings.bsp: $(call _qsys_dep_for,$(NIOS_$(1)_SOPCINFO))
 	@echo "[NIOS] BSP for $(1)..."
 	$$(call _require_nios2_shell)
 	@test -n "$(call _nios_sopcinfo,$(1))" || { \
@@ -380,7 +414,7 @@ $(call _nios_bsp_dir,$(1))/settings.bsp: $(call _nios_sopcinfo,$(1))
 	@"$(NIOS2_SHELL)" nios2-bsp \
 	    $(if $(NIOS_$(1)_BSP_TYPE),$(NIOS_$(1)_BSP_TYPE),$(NIOS_BSP_TYPE)) \
 	    $(call _nios_bsp_dir,$(1)) $(call _nios_sopcinfo,$(1)) \
-	    $(foreach kv,$(NIOS_$(1)_BSP_SETTINGS),--set $(firstword $(subst =, ,$(kv))) $(word 2,$(subst =, ,$(kv))))
+	    $(foreach kv,$(NIOS_$(1)_BSP_SETTINGS),--set $(call _kv_name,$(kv)) $(call _kv_value,$(kv)))
 
 $(call _nios_elf,$(1)): $(call _nios_bsp_dir,$(1))/settings.bsp $(wildcard $(NIOS_$(1)_SRC_DIR)/*)
 	@echo "[NIOS] Application $(1)..."
@@ -410,6 +444,146 @@ nios-bsp: $(NIOS_BSPS)
 
 nios-apps: $(NIOS_ELFS)
 	@$(if $(NIOS_APPS),echo "[NIOS] $(words $(NIOS_APPS)) application(s) built.",echo "[NIOS] No NIOS_APPS declared — nothing to do.")
+
+# ── Nios V software ──────────────────────────────────────────────────────────
+# NIOSV_APPS names the applications to build. Per application:
+#
+#   NIOSV_<app>_SRC_DIR      where its sources live                  (required)
+#   NIOSV_<app>_SOPCINFO     the system it runs on                   (derived when
+#                            exactly one QSYS_SYSTEMS entry is declared)
+#   NIOSV_<app>_BSP_TYPE     BSP flavour, defaults to NIOSV_BSP_TYPE
+#   NIOSV_<app>_CPU_INSTANCE which processor, when the system has several
+#   NIOSV_<app>_BSP_SETTINGS BSP settings as name=value pairs
+#   NIOSV_<app>_INCS         extra include directories
+#
+# There is no per-application compiler-flag variable. The BSP's generated
+# toolchain.cmake governs the whole build, application included, so extra flags
+# are a BSP setting — hal.make.cflags_user_flags — declared in BSP_SETTINGS.
+#
+# The Nios V tools are NOT the Nios II tools and are not reached the same way.
+# They live in niosv/bin, which nios2_command_shell.sh does not put on PATH,
+# and they read QUARTUS_ROOTDIR and SOPC_KIT_NIOS2 from the environment. They
+# are invoked by absolute path here for that reason. niosv-shell exists and has
+# the same never-returns-when-sourced hazard as its Nios II counterpart.
+NIOSV_ROOT     ?= $(ACDS_ROOT)/niosv
+NIOSV_BSP_TOOL ?= $(NIOSV_ROOT)/bin/niosv-bsp
+NIOSV_APP_TOOL ?= $(NIOSV_ROOT)/bin/niosv-app
+NIOSV_ELF2HEX  ?= $(NIOSV_ROOT)/bin/elf2hex
+NIOSV_BSP_TYPE ?= hal
+NIOSV_CMAKE    ?= cmake
+
+# The compiler name is not a preference. The BSP writes it into its own
+# generated toolchain.cmake with a plain set(), which shadows any cache
+# override, so a toolchain reachable under any other name will not be used.
+NIOSV_CC ?= riscv32-unknown-elf-gcc
+
+# Quartus's own libstdc++ shadows the system one once its environment has been
+# sourced, which breaks every non-Quartus binary that links against a newer ABI
+# — cmake dies on a missing GLIBCXX before it reaches the compiler. The rule is
+# not "cmake needs this"; it is that anything outside quartus/linux64 does.
+#
+# niosv/bin goes on PATH because the generated build calls back into it: the
+# application CMakeLists runs niosv-stack-report unqualified, which fails as a
+# bare "command not found" from three levels inside a generated makefile.
+NIOSV_ENV = LD_LIBRARY_PATH= SOPC_KIT_NIOS2=$(ACDS_ROOT)/nios2eds \
+            PATH="$(NIOSV_ROOT)/bin:$(PATH)"
+
+define _require_niosv_tools
+	@for t in "$(NIOSV_BSP_TOOL)" "$(NIOSV_APP_TOOL)" "$(NIOSV_ELF2HEX)"; do \
+	    test -x "$$t" || { \
+	        echo "[NIOSV] error: Nios V tool not found at $$t"; \
+	        echo "[NIOSV]        Set QUARTUS_ROOTDIR (or NIOSV_ROOT) so it resolves."; \
+	        exit 1; }; \
+	done
+	@command -v $(NIOSV_CMAKE) >/dev/null 2>&1 || { \
+	    echo "[NIOSV] error: $(NIOSV_CMAKE) not found on PATH."; \
+	    echo "[NIOSV]        Nios V applications are built by CMake, not by a"; \
+	    echo "[NIOSV]        generated makefile. Set NIOSV_CMAKE or install it."; \
+	    exit 1; }
+	@command -v $(NIOSV_CC) >/dev/null 2>&1 || { \
+	    echo "[NIOSV] error: $(NIOSV_CC) not found on PATH."; \
+	    echo "[NIOSV]        The BSP names this compiler in its generated"; \
+	    echo "[NIOSV]        toolchain.cmake, so it cannot be substituted by"; \
+	    echo "[NIOSV]        setting CMAKE_C_COMPILER. Install a RISC-V"; \
+	    echo "[NIOSV]        bare-metal toolchain under this exact prefix, or"; \
+	    echo "[NIOSV]        set NIOSV_CC if yours is named differently."; \
+	    exit 1; }
+endef
+
+_niosv_bsp_dir   = $(NIOSV_DIR)/$(1)/bsp
+_niosv_app_dir   = $(NIOSV_DIR)/$(1)/app
+_niosv_build_dir = $(NIOSV_DIR)/$(1)/build
+_niosv_elf       = $(call _niosv_build_dir,$(1))/$(1).elf
+
+_niosv_sopcinfo = $(strip $(if $(NIOSV_$(1)_SOPCINFO),$(NIOSV_$(1)_SOPCINFO),\
+    $(if $(filter 1,$(words $(QSYS_SYSTEMS))),$(call _qsys_spc,$(firstword $(QSYS_SYSTEMS))))))
+
+NIOSV_ELFS := $(foreach a,$(NIOSV_APPS),$(call _niosv_elf,$(a)))
+NIOSV_BSPS := $(foreach a,$(NIOSV_APPS),$(call _niosv_bsp_dir,$(a))/settings.bsp)
+
+# --cmd takes its value with an equals sign; the space-separated form is
+# rejected as a missing value. Settings are applied by a second --update pass
+# because --create writes the defaults after any settings given alongside it.
+define _niosv_rule
+$(call _niosv_bsp_dir,$(1))/settings.bsp: $(call _qsys_dep_for,$(NIOSV_$(1)_SOPCINFO))
+	@echo "[NIOSV] BSP for $(1)..."
+	$$(call _require_niosv_tools)
+	@test -n "$(call _niosv_sopcinfo,$(1))" || { \
+	    echo "[NIOSV] error: NIOSV_$(1)_SOPCINFO is not set and cannot be derived."; \
+	    echo "[NIOSV]        Set it, or declare exactly one QSYS_SYSTEMS entry."; \
+	    exit 1; }
+	@$(MKDIR) $(call _niosv_bsp_dir,$(1))
+	@$(NIOSV_ENV) "$(NIOSV_BSP_TOOL)" --create \
+	    --sopcinfo=$(call _niosv_sopcinfo,$(1)) \
+	    --type=$(if $(NIOSV_$(1)_BSP_TYPE),$(NIOSV_$(1)_BSP_TYPE),$(NIOSV_BSP_TYPE)) \
+	    --bsp-dir=$(call _niosv_bsp_dir,$(1)) \
+	    $(if $(NIOSV_$(1)_CPU_INSTANCE),--cpu-instance=$(NIOSV_$(1)_CPU_INSTANCE)) \
+	    $$@
+	$(if $(strip $(NIOSV_$(1)_BSP_SETTINGS)),@$(NIOSV_ENV) "$(NIOSV_BSP_TOOL)" --update \
+	    --bsp-dir=$(call _niosv_bsp_dir,$(1)) \
+	    $(foreach kv,$(NIOSV_$(1)_BSP_SETTINGS),--cmd="set_setting $(call _kv_name,$(kv)) $(call _kv_value,$(kv))") \
+	    $$@)
+
+$(call _niosv_elf,$(1)): $(call _niosv_bsp_dir,$(1))/settings.bsp $(wildcard $(NIOSV_$(1)_SRC_DIR)/*)
+	@echo "[NIOSV] Application $(1)..."
+	$$(call _require_niosv_tools)
+	@test -n "$(NIOSV_$(1)_SRC_DIR)" || { \
+	    echo "[NIOSV] error: NIOSV_$(1)_SRC_DIR is not set."; exit 1; }
+	@$(MKDIR) $(call _niosv_app_dir,$(1))
+	@$(NIOSV_ENV) "$(NIOSV_APP_TOOL)" \
+	    --app-dir=$(call _niosv_app_dir,$(1)) \
+	    --bsp-dir=$(call _niosv_bsp_dir,$(1)) \
+	    --srcs=$(abspath $(NIOSV_$(1)_SRC_DIR)) \
+	    --elf-name=$(1).elf \
+	    $(foreach d,$(NIOSV_$(1)_INCS),--incs=$(abspath $(d)))
+	@$(NIOSV_ENV) $(NIOSV_CMAKE) -G "Unix Makefiles" \
+	    -B $(call _niosv_build_dir,$(1)) -S $(call _niosv_app_dir,$(1))
+	@$(NIOSV_ENV) $(MAKE) -C $(call _niosv_build_dir,$(1))
+endef
+$(foreach a,$(NIOSV_APPS),$(eval $(call _niosv_rule,$(a))))
+
+# elf2hex writes into the Quartus project directory because that is where
+# Quartus resolves the memory's init_file from: the generated memory carries a
+# bare filename, not a path.
+$(NIOSV_MEM_INIT_HEX_PATH): $(if $(NIOSV_MEM_INIT),$(call _niosv_elf,$(NIOSV_MEM_INIT))) | $(QUARTUS_PROJDIR)
+	@echo "[NIOSV] Memory initialisation from $(NIOSV_MEM_INIT)..."
+	$(call _require_niosv_tools)
+	@test -n "$(NIOSV_MEM_INIT_HEX)" -a -n "$(NIOSV_MEM_INIT_BASE)" -a -n "$(NIOSV_MEM_INIT_END)" || { \
+	    echo "[NIOSV] error: NIOSV_MEM_INIT needs NIOSV_MEM_INIT_HEX, _BASE and _END."; \
+	    echo "[NIOSV]        HEX must match the memory's initializationFileName in"; \
+	    echo "[NIOSV]        the Platform Designer system; BASE and END are that"; \
+	    echo "[NIOSV]        memory's address range. None has a default: each one"; \
+	    echo "[NIOSV]        builds a plausible image when wrong."; \
+	    exit 1; }
+	@$(NIOSV_ENV) "$(NIOSV_ELF2HEX)" $(call _niosv_elf,$(NIOSV_MEM_INIT)) \
+	    -o $@ -b $(NIOSV_MEM_INIT_BASE) -e $(NIOSV_MEM_INIT_END) \
+	    -w $(NIOSV_MEM_INIT_WIDTH) -r 4
+
+niosv-bsp: $(NIOSV_BSPS)
+	@$(if $(NIOSV_APPS),echo "[NIOSV] $(words $(NIOSV_APPS)) BSP(s) ready.",echo "[NIOSV] No NIOSV_APPS declared — nothing to do.")
+
+niosv-apps: $(NIOSV_ELFS)
+	@$(if $(NIOSV_APPS),echo "[NIOSV] $(words $(NIOSV_APPS)) application(s) built.",echo "[NIOSV] No NIOSV_APPS declared — nothing to do.")
 
 $(BUILD_DIR)/$(PROJECT_NAME): sta
 

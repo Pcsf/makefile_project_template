@@ -26,9 +26,9 @@ SRC_ROOT := .
 # are swept into this build.
 # SCAN_EXCLUDE := path/to/subproject
 
-# This repo's own Nios II example is a self-contained project; keep its sources
-# out of the template's default build.
-SCAN_EXCLUDE := example/nios2
+# This repo's own soft-processor examples are self-contained projects; keep
+# their sources out of the template's default build.
+SCAN_EXCLUDE := example/nios2 example/niosv
 
 # ── VHDL_SRCS_DIR: directory-level compilation order (Layer 1) ───────────────
 # VHDL compilation order matters: packages must precede their users, entities
@@ -194,3 +194,59 @@ QUARTUS_PGM  := quartus_pgm
 # QUARTUS_ROOTDIR, which the Quartus environment exports. Set it only when the
 # Nios II tools live somewhere the derivation cannot reach.
 # NIOS2_SHELL := /path/to/nios2eds/nios2_command_shell.sh
+
+# ── Nios V software ───────────────────────────────────────────────────────────
+# Only needed when a Platform Designer system contains a Nios V processor.
+# 'make niosv-bsp' generates the board support package and 'make niosv-apps'
+# builds each application into an .elf, both under BUILD_DIR. It is a sibling of
+# the Nios II flow, not a rename: different tools, a CMake build instead of a
+# generated makefile, and memory initialisation done here rather than by the BSP.
+#
+# Two things have to exist that no vendor installer provides:
+#
+#   a RISC-V bare-metal toolchain under the exact prefix the BSP names, which it
+#   writes into its own generated toolchain.cmake with a plain set() that
+#   shadows any CMake cache override — see NIOSV_CC;
+#
+#   CMake, which the generated application build uses.
+#
+# NIOSV_<app>_SOPCINFO is derived when exactly ONE system is declared, on the
+# same reasoning as the Nios II case.
+#
+# NIOSV_APPS           := hello
+# NIOSV_hello_SRC_DIR  := sw/hello
+# NIOSV_hello_SOPCINFO := $(BUILD_DIR)/qsys/my_system/my_system.sopcinfo
+# NIOSV_BSP_TYPE       := hal        # per-app override: NIOSV_hello_BSP_TYPE
+# NIOSV_hello_CPU_INSTANCE := cpu    # required when the system has several
+# NIOSV_hello_INCS     := sw/common
+#
+# There is no per-application compiler-flag variable. The BSP's toolchain.cmake
+# governs the application too, so extra flags are a BSP setting. One of them is
+# usually mandatory: binutils 2.38 moved the CSR instructions out of the base
+# RISC-V I extension, so the BSP's own crt0.S no longer assembles against the
+# -march the processor IP hardcodes. This setting is emitted after that -march
+# and the compiler takes the last one.
+# NIOSV_hello_BSP_SETTINGS := \
+#     hal.make.cflags_user_flags=-march=rv32ia_zicsr \
+#     hal.enable_reduced_device_drivers=true
+#
+# NIOSV_MEM_INIT bakes an application into the FPGA image's on-chip memory, the
+# same idea as NIOS_MEM_INIT but spelled out, because a Nios V BSP has no
+# mem_init_generate. NONE of the three facts below has a default: the name must
+# match the memory's initializationFileName in the Platform Designer system, and
+# BASE/END must be that memory's address range. Each one produces a plausible
+# artefact when wrong — a mismatched name synthesises an empty RAM and the
+# processor fetches zeros, a wrong range silently truncates the image, and the
+# build reports success either way.
+# NIOSV_MEM_INIT       := hello
+# NIOSV_MEM_INIT_HEX   := my_ram.hex
+# NIOSV_MEM_INIT_BASE  := 0x0
+# NIOSV_MEM_INIT_END   := 0x7FFF
+# NIOSV_MEM_INIT_WIDTH := 32         # the memory's data width
+#
+# NIOSV_ROOT is derived from QUARTUS_ROOTDIR; NIOSV_CC and NIOSV_CMAKE name the
+# tools the generated build calls. Set them only when yours are elsewhere or
+# named differently.
+# NIOSV_ROOT  := /path/to/niosv
+# NIOSV_CC    := riscv32-unknown-elf-gcc
+# NIOSV_CMAKE := cmake
