@@ -645,6 +645,26 @@ image is 25%. Any design wanting two images in one device needs it. The ratio
 depends on how full the device is and worsens as a design grows, so measure it
 rather than assume it.
 
+### Platform Designer copies component HDL — `QSYS_DEPS`
+
+A system built from a project's own components generates by *copying* their HDL
+into the generated tree. Editing that HDL therefore does not make the `.qip`
+out of date: the `.qip` is still newer than the `.qsys`, make has nothing to do,
+and the design synthesises the copy taken at the last generation.
+
+The failure mode is the expensive one — the build succeeds, the board runs code
+that is not in the repository, and every symptom points at the source you are
+reading rather than at the source that was compiled.
+
+```make
+QSYS_SEARCH_PATH := ip/my_component
+QSYS_DEPS        := rtl/my_component.vhd
+```
+
+`_hw.tcl` files under `QSYS_SEARCH_PATH` are picked up automatically. The HDL
+they reference cannot be — a `_hw.tcl` may point anywhere — so name those
+sources in `QSYS_DEPS`.
+
 ### The tool-path trap
 
 Sourcing the Quartus environment puts `quartus/linux64` and the simulator on
