@@ -16,7 +16,7 @@ set_instance_parameter_value cpu {exceptionOffset} {32}
 
 add_instance mem altera_avalon_onchip_memory2
 set_instance_parameter_value mem {memorySize} {32768}
-set_instance_parameter_value mem {initMemContent} {0}
+set_instance_parameter_value mem {initMemContent} {1}
 
 add_instance jtag_uart altera_avalon_jtag_uart
 

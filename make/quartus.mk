@@ -24,6 +24,39 @@ QUARTUS_ASM ?= quartus_asm
 QUARTUS_STA ?= quartus_sta
 QUARTUS_PGM ?= quartus_pgm
 
+# ── Constraints ──────────────────────────────────────────────────────────────
+# The QSF is regenerated on every build, so a pin placement written into it by
+# hand does not survive. Projects declare constraints as files instead:
+#
+#   QUARTUS_QSF_EXTRA  files appended verbatim into the generated QSF —
+#                      set_location_assignment, IO_STANDARD, device settings
+#   QUARTUS_SDC        .sdc timing constraints, added as SDC_FILE assignments
+#
+# Both are project facts. Nothing about a pin, a board or a clock belongs in
+# this file.
+QUARTUS_QSF_EXTRA ?=
+QUARTUS_SDC       ?=
+
+# ── VHDL standard ────────────────────────────────────────────────────────────
+# VHDL-2008 for every source by default; list the exceptions in QUARTUS_VHDL93.
+# Same shape as the Vivado toolchain's VIVADO_VHDL93, so a project that spans
+# both vendors declares the exception once per toolchain and not per file.
+QUARTUS_VHDL_VERSION ?= VHDL_2008
+QUARTUS_VHDL93       ?=
+
+# ── On-chip memory initialisation ────────────────────────────────────────────
+# NIOS_MEM_INIT names the application whose program is baked into the FPGA
+# image. A Nios II booting from on-chip memory has nothing to run otherwise:
+# the .sof carries an empty RAM, and the program normally arrives afterwards
+# over a JTAG debug download. Where that download is not available — no cable
+# driver, or a board expected to run standalone — the program has to be in the
+# image, which means the software must be built BEFORE the FPGA image.
+#
+# Declaring it inverts the usual order: synthesis waits for the .elf.
+NIOS_MEM_INIT ?=
+NIOS_DIR      := $(BUILD_DIR)/nios
+NIOS_MEM_INIT_QIP = $(if $(NIOS_MEM_INIT),$(NIOS_DIR)/$(NIOS_MEM_INIT)/app/mem_init/meminit.qip)
+
 # ── Platform Designer and Nios II tool location ──────────────────────────────
 # Sourcing the Quartus environment puts quartus/linux64 and the simulator on
 # PATH and nothing else. qsys-generate lives under quartus/sopc_builder/bin and
@@ -138,7 +171,7 @@ $(QPF_FILE): | $(QUARTUS_PROJDIR)
 	echo "PROJECT_REVISION = \"$(PROJECT_NAME)\""; \
 	) > $@
 
-$(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(QPF_FILE)
+$(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QUARTUS_QSF_EXTRA) $(QUARTUS_SDC) $(QPF_FILE)
 	@echo "[QUARTUS] Generating settings file: $(QSF_FILE)"
 	@( \
 	echo "set_global_assignment -name FAMILY \"$(patsubst \"%\",%,$(QUARTUS_FAMILY))\""; \
@@ -146,11 +179,14 @@ $(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(QPF_FILE)
 	echo "set_global_assignment -name TOP_LEVEL_ENTITY $(QUARTUS_TOP)"; \
 	echo "set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files"; \
 	$(foreach f,$(VHDL_SRCS),\
-	    echo "set_global_assignment -name VHDL_FILE $(_ROOT_REL)/$(f)";) \
+	    echo "set_global_assignment -name VHDL_FILE $(_ROOT_REL)/$(f) -hdl_version $(if $(filter $(f),$(QUARTUS_VHDL93)),VHDL_1993,$(QUARTUS_VHDL_VERSION))";) \
 	$(foreach f,$(V_SRCS),\
 	    echo "set_global_assignment -name VERILOG_FILE $(_ROOT_REL)/$(f)";) \
-	$(foreach f,$(QSYS_QIPS),\
+	$(foreach f,$(QSYS_QIPS) $(NIOS_MEM_INIT_QIP),\
 	    echo "set_global_assignment -name QIP_FILE $(_ROOT_REL)/$(f)";) \
+	$(foreach f,$(QUARTUS_SDC),\
+	    echo "set_global_assignment -name SDC_FILE $(_ROOT_REL)/$(f)";) \
+	$(foreach f,$(QUARTUS_QSF_EXTRA),cat $(f);) \
 	) > $@
 
 # ── Analysis & synthesis ─────────────────────────────────────────────────────
@@ -158,7 +194,7 @@ $(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(QPF_FILE)
 # NOT given --source: that flag adds a DESIGN file, so handing it the settings
 # file makes Quartus try to elaborate the .qsf and report the real top level as
 # undefined. Nor --part: the device belongs in one place, and that is the .qsf.
-synth: $(QSYS_QIPS) $(QSF_FILE)
+synth: $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QSF_FILE)
 	@echo "[QUARTUS] Analysis and synthesis..."
 	$(QUARTUS_MAP) --read_settings_files=on --write_settings_files=off \
 	    $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
@@ -201,7 +237,6 @@ program:
 # under BUILD_DIR. --src-dir points back at the project's sources, so nothing is
 # written next to them.
 NIOS_BSP_TYPE ?= hal
-NIOS_DIR      := $(BUILD_DIR)/nios
 
 _nios_bsp_dir = $(NIOS_DIR)/$(1)/bsp
 _nios_app_dir = $(NIOS_DIR)/$(1)/app
@@ -246,6 +281,13 @@ $(call _nios_elf,$(1)): $(call _nios_bsp_dir,$(1))/settings.bsp $(wildcard $(NIO
 	@"$(NIOS2_SHELL)" $(MAKE) -C $(call _nios_app_dir,$(1))
 endef
 $(foreach a,$(NIOS_APPS),$(eval $(call _nios_rule,$(a))))
+
+# mem_init_generate is a target of the BSP-generated application makefile, so it
+# runs there rather than being reimplemented here.
+$(NIOS_MEM_INIT_QIP): $(if $(NIOS_MEM_INIT),$(call _nios_elf,$(NIOS_MEM_INIT)))
+	@echo "[NIOS] Memory initialisation from $(NIOS_MEM_INIT)..."
+	$(call _require_nios2_shell)
+	@"$(NIOS2_SHELL)" $(MAKE) -C $(call _nios_app_dir,$(NIOS_MEM_INIT)) mem_init_generate
 
 nios-bsp: $(NIOS_BSPS)
 	@$(if $(NIOS_APPS),echo "[NIOS] $(words $(NIOS_APPS)) BSP(s) ready.",echo "[NIOS] No NIOS_APPS declared — nothing to do.")
