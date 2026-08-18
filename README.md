@@ -575,6 +575,27 @@ enumerating that tree would be a hand-maintained list of files the tool owns.
 It is deliberately absent from `V_SRCS`/`VHDL_SRCS` — `make scan` does not look
 inside `BUILD_DIR`.
 
+### Never generate a system into the source tree
+
+`make qsys` generates under `BUILD_DIR` for a reason beyond tidiness: `make
+scan` sweeps the source tree, and a hand-generated Platform Designer tree left
+beside the `.qsys` gets swallowed whole. Every generated file then appears
+twice — once enumerated by the scan, once through the `.qip` — and the two
+disagree about file types.
+
+The symptom is not "duplicate source". It is a SystemVerilog syntax error in
+vendor IP:
+
+```
+Error (10839): Verilog HDL error at altera_tse_pipeline_stage.sv(127):
+               '0 is a SystemVerilog feature
+```
+
+because the scan enumerates `.sv` files as `VERILOG_FILE` while the `.qip`
+correctly declares them `SYSTEMVERILOG_FILE`. Delete the stray generated
+directory and re-run `make scan`; or if a generated tree genuinely has to live
+in the source tree, name it in `SCAN_EXCLUDE`.
+
 ### The tool-path trap
 
 Sourcing the Quartus environment puts `quartus/linux64` and the simulator on
