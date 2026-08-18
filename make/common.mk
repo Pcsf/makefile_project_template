@@ -3,6 +3,13 @@
 # Included by the root Makefile after toolchain-specific rules.
 # ==============================================================================
 
+# ── Literals ─────────────────────────────────────────────────────────────────
+# make has no way to write a bare space or comma inside a $(subst), so both are
+# built here and used by any toolchain that has to join a list.
+empty :=
+space := $(empty) $(empty)
+comma := ,
+
 .PHONY: scan clean distclean help info _help_text _help_workflow
 
 # ── scan ──────────────────────────────────────────────────────────────────────
