@@ -110,6 +110,19 @@ endef
 # .sopcinfo next to the .qsys it was handed, so generating in place drops a
 # 170 kB generated file into the source tree on every build. Generating from a
 # staged copy keeps every artefact under BUILD_DIR.
+# QSYS_SEARCH_PATH lists directories holding a project's own _hw.tcl components.
+# Platform Designer sees only the vendor library otherwise, and a system that
+# instantiates a project component fails to generate with the component reported
+# as unknown.
+#
+# Passed through the environment rather than as --search-path, which requires a
+# trailing '$' to keep the standard library. That '$' has to survive a define,
+# an $(eval) and the shell, and every escaping of it either becomes the shell's
+# process id or is eaten and leaves a quote open. The environment form appends
+# to the standard path instead of replacing it, so there is nothing to escape.
+QSYS_SEARCH_PATH ?=
+_qsys_env = $(if $(QSYS_SEARCH_PATH),QSYS_IP_SEARCH_PATH="$(subst $(space),:,$(foreach d,$(QSYS_SEARCH_PATH),$(abspath $(d))))")
+
 QSYS_LANG ?= VERILOG
 QSYS_DIR  := $(BUILD_DIR)/qsys
 
@@ -129,7 +142,7 @@ $(call _qsys_qip,$(1)): $(1)
 	$$(call _require_nios2_shell)
 	@$(MKDIR) $(dir $(call _qsys_staged,$(1)))
 	@cp $(1) $(call _qsys_staged,$(1))
-	@"$(NIOS2_SHELL)" qsys-generate $(call _qsys_staged,$(1)) \
+	@$(_qsys_env) "$(NIOS2_SHELL)" qsys-generate $(call _qsys_staged,$(1)) \
 	    --synthesis=$(QSYS_LANG) \
 	    --output-directory=$(call _qsys_gen,$(1)) \
 	    --part=$(QUARTUS_PART)
