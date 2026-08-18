@@ -43,6 +43,12 @@
 # contract rather than a safety net.
 # ==============================================================================
 
+# ── Tool names ───────────────────────────────────────────────────────────────
+# Defaulted rather than required. Without a default an unset variable expands to
+# nothing and the recipe runs its own first flag as the command, which fails as
+# "not found" and points at the flag rather than at the missing tool.
+VIVADO ?= vivado
+
 # ── Layout ────────────────────────────────────────────────────────────────────
 # VIVADO_OUT is also the working directory of every in-memory run: Vivado
 # writes an in-memory project's output products (.gen/, .srcs/, .Xil/) into the
