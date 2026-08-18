@@ -777,7 +777,7 @@ VIVADO_BD_INTF_FREQ := M_AXI_GP0_0=125000000
 
 # Cells reuse the same variables as create_ip IP:
 VIVADO_IP_ps7_0_VLNV   := xilinx.com:ip:processing_system7:5.5
-VIVADO_IP_ps7_0_PRESET := vivado/board_files/arty-z7-20/A.0/preset.xml
+VIVADO_IP_ps7_0_PRESET := vivado/board_files/<board>/<rev>/preset.xml
 VIVADO_IP_ps7_0_CONFIG := CONFIG.PCW_FPGA0_PERIPHERAL_FREQMHZ=125
 ```
 
