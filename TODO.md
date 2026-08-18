@@ -5,8 +5,9 @@ The framework covers one corner of non-volatile programming: the Xilinx SoC.
 into QSPI with `program_flash`, and both are documented in `make/vivado.mk` and
 `README.md`. That path is implemented, proven on hardware, and out of scope here.
 
-This file scopes what is left: **Xilinx non-SoC, Intel non-SoC, and Intel SoC.**
-None of them are implemented.
+This file scopes what is left: **Xilinx non-SoC and Intel SoC.** Neither is
+implemented. Intel non-SoC was, on 2026-08-18 — see below for what it taught,
+which the two remaining cases inherit.
 
 > **The command syntax in the sketches below is unverified.** It is written from
 > documentation, not from a run. This repo's convention is that a claim carries
@@ -29,7 +30,7 @@ not** decides what a "flash image" even is.
 | | Non-SoC (fabric only) | SoC (hard processor) |
 |---|---|---|
 | **Xilinx / AMD** | **Open** — 7-series, UltraScale(+): flash holds a raw bitstream, loaded by the FPGA's own config engine | *Covered* — Zynq-7000, Zynq UltraScale+, Versal: `bootgen` + `program_flash` |
-| **Intel / Altera** | **Open** — Cyclone, Arria, MAX 10: flash (EPCQ/EPCS, or MAX 10 internal CFM) holds a converted bitstream | **Open** — Cyclone V SoC, Arria 10 SoC, Agilex: HPS boots a preloader/U-Boot chain; the fabric image is a separate `.rbf` |
+| **Intel / Altera** | *Covered* — Cyclone, Arria: `quartus_cpf` + `quartus_pgm`, proven on hardware. MAX 10's internal CFM is untried | **Open** — Cyclone V SoC, Arria 10 SoC, Agilex: HPS boots a preloader/U-Boot chain; the fabric image is a separate `.rbf` |
 
 The two non-SoC cases are close cousins: convert bitstream → flash image, then
 program through JTAG indirect. The Intel SoC case is different work again, and
@@ -127,24 +128,43 @@ Open questions: whether `-loadbit` offsets need to be a variable for
 MultiBoot/golden-update layouts, the way the SoC path exposes a per-image
 offset; how to enumerate valid `get_cfgmem_parts` without hardcoding one board.
 
-### Intel non-SoC — Cyclone / Arria / MAX 10
+### Intel non-SoC — Cyclone / Arria — IMPLEMENTED
+
+`make cfgmem` builds the image and `make flash` writes it, in `make/quartus.mk`.
+Proven on Quartus Prime Lite 22.1std.0.915 against a Cyclone 10 LP 10CL055 with
+an EPCQ16, written over JTAG indirect and confirmed by power-cycling the board
+and watching it come up on the flashed design.
 
 ```sh
-quartus_cpf -c -d <EPCQ device> -s <fpga device> <top>.sof <out>.pof   # AS
-quartus_cpf -c -o device1=<...> <top>.sof <out>.jic                    # JTAG indirect
-quartus_cpf -c -o bitstream_compression=on <top>.sof <out>.rbf         # raw
+quartus_cpf -o <opts> -c -d EPCQ16 -s <fpga part> <top>.sof <out>.jic   # JTAG indirect
+quartus_cpf -o <opts> -c -d EPCQ16 <top>.sof <out>.pof                  # direct
+quartus_cpf -o <opts> -c <top>.sof <out>.rbf                            # raw
 
-quartus_pgm -c <cable> -m jtag -o "p;<out>.jic"
+quartus_pgm -m jtag -o "IPV;<out>.jic"    # I = indirect, P = program, V = verify
+quartus_pgm -m jtag -o "BPV;<out>.pof"    # B = blank check
 ```
 
-`quartus.mk` currently stops at `.sof` and a JTAG `program` target, so both new
-targets are additions rather than edits.
+What it settled, beyond the syntax:
 
-Open questions: `.pof` vs `.jic` vs `.rbf` is a real fork driven by how the board
-is wired (AS vs JTAG indirect vs HPS-loaded), so `FLASH_IMAGE`'s extension
-probably has to drive the recipe; MAX 10 is its own case since the config flash
-is on-die; a `.cof` conversion file may be needed for anything non-trivial, which
-means generating one rather than passing flags.
+- **`.pof` vs `.jic` vs `.rbf` is decided by how the device is reached, not by
+  preference.** A configuration device the FPGA boots from in AS mode is written
+  *through* the FPGA over JTAG, which is `.jic`. `FLASH_FORMAT` selects it and
+  drives which `quartus_cpf` arguments apply.
+- **`FLASH_DEVICE` is required, no default.** `quartus_cpf` accepts a wrong
+  configuration device, reports success, and writes an image the FPGA will not
+  boot — the `BOOT_ARCH` failure mode exactly.
+- **Compression is not an optimisation.** On the device this was proven against,
+  one uncompressed image is 88% of the configuration memory and one compressed
+  image is 25%. A golden-plus-update layout is impossible without it. The ratio
+  worsens as a design fills the device, so it is a number to re-measure rather
+  than a property to rely on.
+- **Verify is on by default**, as `IPV`/`BPV`. `FLASH_VERIFY` exists because a
+  format may not support it, not to offer turning it off.
+- No `.cof` conversion file was needed; the command-line arguments covered every
+  format above.
+
+MAX 10 remains untried — its configuration flash is on-die and is a different
+mechanism.
 
 ### Intel SoC — Cyclone V SoC / Arria 10 SoC
 
