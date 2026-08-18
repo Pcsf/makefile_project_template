@@ -168,6 +168,12 @@ $(QUARTUS_PROJDIR):
 # generated tree instead would be a hand-maintained list of files the tool owns.
 # Generated HDL is deliberately absent from V_SRCS/VHDL_SRCS — it is a build
 # artefact under BUILD_DIR, and 'make scan' does not look there.
+#
+# .sv is declared SYSTEMVERILOG_FILE, not VERILOG_FILE. The scan groups .v and
+# .sv together because most of the framework does not care, but Quartus does:
+# read as Verilog-2001, a SystemVerilog source fails on constructs like '0 with
+# a syntax error that points at the vendor's file rather than at the assignment
+# that mis-declared it.
 $(QPF_FILE): | $(QUARTUS_PROJDIR)
 	@echo "[QUARTUS] Generating project file: $(QPF_FILE)"
 	@( \
@@ -184,8 +190,10 @@ $(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QUARTUS_
 	echo "set_global_assignment -name PROJECT_OUTPUT_DIRECTORY output_files"; \
 	$(foreach f,$(VHDL_SRCS),\
 	    echo "set_global_assignment -name VHDL_FILE $(_ROOT_REL)/$(f) -hdl_version $(if $(filter $(f),$(QUARTUS_VHDL93)),VHDL_1993,$(QUARTUS_VHDL_VERSION))";) \
-	$(foreach f,$(V_SRCS),\
+	$(foreach f,$(filter-out %.sv,$(V_SRCS)),\
 	    echo "set_global_assignment -name VERILOG_FILE $(_ROOT_REL)/$(f)";) \
+	$(foreach f,$(filter %.sv,$(V_SRCS)),\
+	    echo "set_global_assignment -name SYSTEMVERILOG_FILE $(_ROOT_REL)/$(f)";) \
 	$(foreach f,$(QSYS_QIPS) $(NIOS_MEM_INIT_QIP),\
 	    echo "set_global_assignment -name QIP_FILE $(_ROOT_REL)/$(f)";) \
 	$(foreach f,$(QUARTUS_SDC),\
@@ -193,12 +201,45 @@ $(QSF_FILE): $(VHDL_SRCS) $(V_SRCS) $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QUARTUS_
 	$(foreach f,$(QUARTUS_QSF_EXTRA),cat $(f);) \
 	) > $@
 
+# ── Guard: generated IP swept into the source list ───────────────────────────
+# Platform Designer output belongs under BUILD_DIR. When a system is generated
+# into the source tree by hand instead, 'make scan' enumerates all of it, every
+# file lands in the project twice — once from the scan, once through the .qip —
+# and the two disagree about file types.
+#
+# The failure that reaches the user is a SystemVerilog syntax error inside
+# vendor IP, which sends them looking at the vendor's code. This says what is
+# actually wrong.
+#
+# The test runs in shell rather than in $(if): a make-level conditional whose
+# body contains $(foreach) breaks, because the foreach's commas are read as
+# $(if) argument separators.
+_scanned_ip_dirs = $(sort $(foreach f,$(VHDL_SRCS) $(V_SRCS),\
+    $(if $(wildcard $(dir $(f))*.qip),$(patsubst %/,%,$(dir $(f))))))
+
+define _check_scanned_ip
+	@dirs="$(_scanned_ip_dirs)"; \
+	if [ -n "$$dirs" ]; then \
+	    echo "[QUARTUS] error: generated IP found in the scanned source tree:"; \
+	    for d in $$dirs; do echo "[QUARTUS]          $$d"; done; \
+	    echo "[QUARTUS]"; \
+	    echo "[QUARTUS]        Those directories hold a .qip, so they are tool output."; \
+	    echo "[QUARTUS]        Scanning them puts every generated file in the project"; \
+	    echo "[QUARTUS]        twice and mis-declares .sv sources as Verilog."; \
+	    echo "[QUARTUS]"; \
+	    echo "[QUARTUS]        Generate into BUILD_DIR (see QSYS_SYSTEMS), or name"; \
+	    echo "[QUARTUS]        the directory in SCAN_EXCLUDE and re-run 'make scan'."; \
+	    exit 1; \
+	fi
+endef
+
 # ── Analysis & synthesis ─────────────────────────────────────────────────────
 # quartus_map takes the project path and reads the .qsf sitting beside it. It is
 # NOT given --source: that flag adds a DESIGN file, so handing it the settings
 # file makes Quartus try to elaborate the .qsf and report the real top level as
 # undefined. Nor --part: the device belongs in one place, and that is the .qsf.
 synth: $(QSYS_QIPS) $(NIOS_MEM_INIT_QIP) $(QSF_FILE)
+	$(call _check_scanned_ip)
 	@echo "[QUARTUS] Analysis and synthesis..."
 	$(QUARTUS_MAP) --read_settings_files=on --write_settings_files=off \
 	    $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
