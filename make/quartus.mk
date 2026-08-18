@@ -165,7 +165,7 @@ SOF_FILE        := $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).sof
 # slash, or the first QSF written differs from every later one.
 _ROOT_REL := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../..")
 
-.PHONY: all synth fit asm sta program cfgmem flash qsys nios-bsp nios-apps \
+.PHONY: all synth fit asm sta program cfgmem flash flash-erase qsys nios-bsp nios-apps \
         niosv-bsp niosv-apps _help_quartus
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
@@ -181,6 +181,7 @@ _help_quartus:
 	@echo "    program    Load the .sof into the device over JTAG"
 	@echo "    cfgmem     Build the configuration-memory image from the .sof"
 	@echo "    flash      Write that image to the configuration device"
+	@echo "    flash-erase Erase the configuration device and blank-check it"
 	@echo "    qsys       Generate HDL from every QSYS_SYSTEMS entry"
 	@echo "    nios-bsp   Generate the board support package for each Nios II app"
 	@echo "    nios-apps  Build every NIOS_APPS entry into an .elf"
@@ -361,6 +362,19 @@ flash: $(FLASH_IMAGE)
 	    echo "[QUARTUS] error: FLASH_FORMAT=$(FLASH_FORMAT) is not something quartus_pgm writes."; \
 	    echo "[QUARTUS]        Use jic or pof."; exit 1; }
 	$(QUARTUS_PGM) -m jtag -o "$(_flash_pgm_op);$(FLASH_IMAGE)"
+
+# Erasing needs an image only because the bridge is built from it: the loader
+# that reaches the configuration device is derived from the same file. Nothing
+# of the image is written.
+#
+# R is erase and E is examine. IE is rejected as an illegal option string rather
+# than examining something by surprise, but the letter is not the one the word
+# starts with. B blank-checks in the same pass, which is the only way to tell an
+# erase that worked from one that reported success.
+flash-erase: $(FLASH_IMAGE)
+	@echo "[QUARTUS] Erasing the configuration device..."
+	$(call _require_flash_device)
+	$(QUARTUS_PGM) -m jtag -o "IRB;$(FLASH_IMAGE)"
 
 $(FLASH_IMAGE): cfgmem
 
