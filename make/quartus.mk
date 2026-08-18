@@ -515,6 +515,15 @@ nios-apps: $(NIOS_ELFS)
 #   NIOSV_<app>_CPU_INSTANCE which processor, when the system has several
 #   NIOSV_<app>_BSP_SETTINGS BSP settings as name=value pairs
 #   NIOSV_<app>_INCS         extra include directories
+#   NIOSV_<app>_DEFINES      preprocessor defines, as NAME or NAME=value. The
+#                            tool that generates the application has no option
+#                            for these, so they are handed to the generated
+#                            build instead. A project that builds one program
+#                            in more than one variant from the same sources
+#                            needs them. project.mk is a prerequisite of every
+#                            application, so changing one rebuilds what it
+#                            affects — without that the program stays up to
+#                            date and the change silently does not happen.
 #
 # There is no per-application compiler-flag variable. The BSP's generated
 # toolchain.cmake governs the whole build, application included, so extra flags
@@ -604,7 +613,7 @@ $(call _niosv_bsp_dir,$(1))/settings.bsp: $(call _qsys_dep_for,$(NIOSV_$(1)_SOPC
 	    $(foreach kv,$(NIOSV_$(1)_BSP_SETTINGS),--cmd="set_setting $(call _kv_name,$(kv)) $(call _kv_value,$(kv))") \
 	    $$@)
 
-$(call _niosv_elf,$(1)): $(call _niosv_bsp_dir,$(1))/settings.bsp $(wildcard $(NIOSV_$(1)_SRC_DIR)/*)
+$(call _niosv_elf,$(1)): $(call _niosv_bsp_dir,$(1))/settings.bsp $(wildcard $(NIOSV_$(1)_SRC_DIR)/*) $(PROJECT_MK)
 	@echo "[NIOSV] Application $(1)..."
 	$$(call _require_niosv_tools)
 	@test -n "$(NIOSV_$(1)_SRC_DIR)" || { \
@@ -617,6 +626,8 @@ $(call _niosv_elf,$(1)): $(call _niosv_bsp_dir,$(1))/settings.bsp $(wildcard $(N
 	    --elf-name=$(1).elf \
 	    $(foreach d,$(NIOSV_$(1)_INCS),--incs=$(abspath $(d)))
 	@$(NIOSV_ENV) $(NIOSV_CMAKE) -G "Unix Makefiles" \
+	    $(if $(strip $(NIOSV_$(1)_DEFINES)),\
+	        -DCMAKE_C_FLAGS="$(foreach d,$(NIOSV_$(1)_DEFINES),-D$(d))") \
 	    -B $(call _niosv_build_dir,$(1)) -S $(call _niosv_app_dir,$(1))
 	@$(NIOSV_ENV) $(MAKE) -C $(call _niosv_build_dir,$(1))
 endef

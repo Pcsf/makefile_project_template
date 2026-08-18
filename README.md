@@ -688,6 +688,25 @@ the generation that produced it. The wrapper therefore builds in a temporary
 directory and only replaces the real file on success, so a failed run leaves
 the previous system intact.
 
+### Building one program in variants — `NIOSV_<app>_DEFINES`
+
+When one program is built more than once from the same sources, differing only
+in a compile-time setting:
+
+```make
+NIOSV_myapp_DEFINES := VARIANT=0 VERBOSE=1
+```
+
+The tool that generates the application has no option for preprocessor defines,
+so they are handed to the generated build instead.
+
+**`project.mk` is a prerequisite of every application**, because a setting
+baked into an artefact is a build input like a source file. Without that,
+editing the setting leaves the artefact up to date and the change simply does
+not happen — the program keeps the previous definition and nothing reports that
+anything was ignored. `PROJECT_MK` is available to any rule with the same
+property.
+
 ### The tool-path trap
 
 Sourcing the Quartus environment puts `quartus/linux64` and the simulator on

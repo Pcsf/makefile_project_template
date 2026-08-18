@@ -61,6 +61,11 @@ endif
 # ── Project configuration ─────────────────────────────────────────────────────
 -include project.mk
 
+# The project's own configuration is a build input like any source file. Rules
+# that bake a setting into an artefact — preprocessor defines, generics, tool
+# switches — name this so that changing a setting rebuilds what it affects.
+PROJECT_MK := $(wildcard project.mk)
+
 PROJECT_NAME ?= project
 BUILD_DIR    ?= build
 TOOLCHAIN    ?= gcc
