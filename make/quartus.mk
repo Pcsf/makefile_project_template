@@ -124,7 +124,11 @@ qsys: $(QSYS_QIPS)
 QUARTUS_PROJDIR := $(BUILD_DIR)/quartus_proj
 QSF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).qsf
 QPF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).qpf
-SOF_FILE        := $(QUARTUS_PROJDIR)/$(PROJECT_NAME).sof
+# The QSF sets PROJECT_OUTPUT_DIRECTORY, so the assembler writes here rather
+# than beside the project file. Naming the project directory instead makes
+# 'make program' fail with "File name ... does not exist" after a build that
+# plainly succeeded.
+SOF_FILE        := $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).sof
 
 # Project-root path as seen from the Quartus project directory. realpath fails
 # when that directory does not exist yet — on the very first build — so the
