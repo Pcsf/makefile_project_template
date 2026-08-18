@@ -21,13 +21,15 @@ removed within an existing directory.
 | `vivado` | VHDL, Verilog, SV + XDC | Xilinx Vivado |
 | `quartus` | VHDL, Verilog, SV | Intel/Altera Quartus Prime |
 
-**Non-volatile programming is covered for one case only: the Xilinx SoC.**
+**Non-volatile programming is covered for two cases.** On the Xilinx SoC,
 `boot-image` and `flash-boot` build a `BOOT.BIN` with `bootgen` and write it to
 QSPI with `program_flash` — the Zynq-7000 path, where the BootROM parses a boot
-image rather than loading a raw bitstream. The non-SoC case (`write_cfgmem`) and
-everything on the Intel side are still unimplemented and stay scoped in
-[`TODO.md`](TODO.md), along with what the covered case taught: the SoC case is
-not the non-SoC case with extra steps, and treating it as one is the trap.
+image rather than loading a raw bitstream. On the Intel side, `cfgmem`, `flash`
+and `flash-erase` build and write a configuration-device image, the Active
+Serial path, where the device holds a bitstream and no boot image exists. The
+Xilinx non-SoC case (`write_cfgmem`) stays scoped in [`TODO.md`](TODO.md), along
+with what the covered cases taught: the SoC case is not the non-SoC case with
+extra steps, and treating it as one is the trap.
 
 ---
 
@@ -331,6 +333,7 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make nios-apps` | `quartus` | Build every Nios II application into an `.elf` |
 | `make cfgmem` | `quartus` | Build the configuration-memory image from the `.sof` |
 | `make flash` | `quartus` | Write that image to the configuration device |
+| `make flash-erase` | `quartus` | Erase the configuration device and blank-check it |
 | `make program` | `vivado`, `quartus` | Program connected device |
 
 Bare-metal software on the exported platform, and the non-volatile path
@@ -614,6 +617,17 @@ FLASH_VERIFY      := 1           # on by default
 `make cfgmem` builds the image, `make flash` writes it. Two targets rather than
 one because building is cheap and repeatable and writing flash is neither — the
 same split the Xilinx `boot-image` / `flash-boot` pair uses.
+
+`make flash-erase` erases the device and blank-checks it in the same pass. It
+still takes an image, because the loader that reaches the configuration device
+is built from it — nothing of the image is written. **In `quartus_pgm` option
+strings `R` is erase and `E` is examine**, so the erase operation is `IR`, and
+`IE` is rejected as illegal rather than quietly examining something.
+
+Blank-checking in the same pass is the point of the target: an erase that
+reports success and an erase that happened are different claims, and the
+blank-check is what separates them. It is a pass-on-emptiness check, so validate
+it against a programmed device — where it must fail — before trusting a pass.
 
 **The format follows how the device is reached, not preference.** A
 configuration device the FPGA boots from in Active Serial mode is written
