@@ -66,11 +66,11 @@ VIVADO_FLAGS    := -mode batch -notrace
 # ── Board files (optional) ────────────────────────────────────────────────────
 # A board part supplies presets a bare part number cannot: DDR timing and MIO
 # assignments for a Zynq PS, pin maps, interface definitions. Third-party
-# boards (Digilent et al.) are not shipped with Vivado, so VIVADO_BOARD_REPO
-# points at a vendored copy — keeping it in the project means a fresh clone
-# builds without modifying the Vivado installation.
+# boards are not shipped with Vivado, so VIVADO_BOARD_REPO points at a vendored
+# copy — keeping it in the project means a fresh clone builds without modifying
+# the Vivado installation.
 #   VIVADO_BOARD_REPO := vivado/board_files
-#   VIVADO_BOARD_PART := digilentinc.com:arty-z7-20:part0:1.1
+#   VIVADO_BOARD_PART := <vendor>:<board>:part0:<version>
 VIVADO_BOARD_REPO ?=
 VIVADO_BOARD_PART ?=
 
@@ -816,9 +816,9 @@ vitis-run: $(if $(strip $(VITIS_RUN_APP)),$(VITIS_RUN_ELF)) | $(BUILD_DIR)
 # Declare images in project.mk:
 #
 #   BOOT_IMAGES            := golden update
-#   BOOT_golden_BIF        := boot/arty/golden.bif
+#   BOOT_golden_BIF        := boot/golden.bif
 #   BOOT_golden_OFFSET     := 0x000000
-#   BOOT_update_BIF        := boot/arty/update.bif
+#   BOOT_update_BIF        := boot/update.bif
 #   BOOT_update_OFFSET     := 0x700000
 #
 # Paths inside a .bif are resolved relative to the directory make runs from,
