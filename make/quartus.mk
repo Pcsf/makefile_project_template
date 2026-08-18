@@ -23,6 +23,7 @@ QUARTUS_FIT ?= quartus_fit
 QUARTUS_ASM ?= quartus_asm
 QUARTUS_STA ?= quartus_sta
 QUARTUS_PGM ?= quartus_pgm
+QUARTUS_CPF ?= quartus_cpf
 
 # ── Constraints ──────────────────────────────────────────────────────────────
 # The QSF is regenerated on every build, so a pin placement written into it by
@@ -136,7 +137,7 @@ SOF_FILE        := $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).sof
 # slash, or the first QSF written differs from every later one.
 _ROOT_REL := $(shell realpath --relative-to=$(QUARTUS_PROJDIR) . 2>/dev/null || echo "../..")
 
-.PHONY: all synth fit asm sta program qsys nios-bsp nios-apps _help_quartus
+.PHONY: all synth fit asm sta program cfgmem flash qsys nios-bsp nios-apps _help_quartus
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_quartus
@@ -149,6 +150,8 @@ _help_quartus:
 	@echo "    asm        Assembler — produces the .sof"
 	@echo "    sta        Timing analysis — this is what 'all' builds"
 	@echo "    program    Load the .sof into the device over JTAG"
+	@echo "    cfgmem     Build the configuration-memory image from the .sof"
+	@echo "    flash      Write that image to the configuration device"
 	@echo "    qsys       Generate HDL from every QSYS_SYSTEMS entry"
 	@echo "    nios-bsp   Generate the board support package for each Nios II app"
 	@echo "    nios-apps  Build every NIOS_APPS entry into an .elf"
@@ -261,6 +264,74 @@ sta: asm
 	@echo "[QUARTUS] Static timing analysis..."
 	$(QUARTUS_STA) $(QUARTUS_PROJDIR)/$(PROJECT_NAME)
 	@echo "[QUARTUS] Build complete: $(SOF_FILE)"
+
+# ── Configuration memory ─────────────────────────────────────────────────────
+# 'make cfgmem' builds the flash image from the build's own .sof; 'make flash'
+# writes it. Split for the reason the Xilinx side is split: building is cheap
+# and repeatable, writing flash is neither.
+#
+# FLASH_DEVICE HAS NO DEFAULT, deliberately, on the BOOT_ARCH precedent. Name
+# the wrong configuration device and quartus_cpf still reports success and still
+# writes an image — one the FPGA will not boot from. A default would make that
+# the cost of forgetting one line.
+#
+#   FLASH_FORMAT   jic  JTAG indirect — the FPGA is used as a bridge to write a
+#                       configuration device it boots from in AS mode
+#                  pof  direct programming of the configuration device
+#                  rbf  raw bitstream, for a loader that is not Quartus
+#
+# Compression matters here beyond build time: an uncompressed image can be most
+# of a small configuration device, so a design that needs two images in one
+# device may only fit compressed. Measure rather than assume — the ratio depends
+# on how full the device is, so it worsens as a design grows.
+FLASH_DEVICE      ?=
+FLASH_FORMAT      ?= jic
+FLASH_COMPRESSION ?= on
+FLASH_VERIFY      ?= 1
+FLASH_IMAGE       ?= $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).$(FLASH_FORMAT)
+
+_FLASH_OPT := $(QUARTUS_PROJDIR)/cpf_options.txt
+
+# jic needs the FPGA as well as the configuration device: it is the bridge the
+# JTAG write goes through. pof addresses the configuration device directly.
+_flash_cpf_args = $(strip \
+    $(if $(filter jic,$(FLASH_FORMAT)),-d $(FLASH_DEVICE) -s $(QUARTUS_PART)) \
+    $(if $(filter pof,$(FLASH_FORMAT)),-d $(FLASH_DEVICE)))
+
+# Verify is on by default and stays a variable only because a format may not
+# support it. A flash write that reports success and leaves a board that will
+# not boot is the worst thing this could ship.
+_flash_pgm_op = $(strip \
+    $(if $(filter jic,$(FLASH_FORMAT)),$(if $(filter 1,$(FLASH_VERIFY)),IPV,IP)) \
+    $(if $(filter pof,$(FLASH_FORMAT)),$(if $(filter 1,$(FLASH_VERIFY)),BPV,BP)))
+
+define _require_flash_device
+	@test -n "$(FLASH_DEVICE)" || { \
+	    echo "[QUARTUS] error: FLASH_DEVICE is not set."; \
+	    echo "[QUARTUS]        Name the configuration device, e.g. FLASH_DEVICE := EPCQ16."; \
+	    echo "[QUARTUS]        It has no default: quartus_cpf accepts a wrong device,"; \
+	    echo "[QUARTUS]        reports success, and writes an image that will not boot."; \
+	    exit 1; }
+endef
+
+$(_FLASH_OPT): | $(QUARTUS_PROJDIR)
+	@echo "bitstream_compression=$(FLASH_COMPRESSION)" > $@
+
+cfgmem: $(SOF_FILE) $(_FLASH_OPT)
+	@echo "[QUARTUS] Building $(FLASH_FORMAT) image..."
+	$(if $(filter rbf,$(FLASH_FORMAT)),,$(call _require_flash_device))
+	$(QUARTUS_CPF) -o $(_FLASH_OPT) -c $(_flash_cpf_args) $(SOF_FILE) $(FLASH_IMAGE)
+	@echo "[QUARTUS] $(FLASH_IMAGE)"
+
+flash: $(FLASH_IMAGE)
+	@echo "[QUARTUS] Writing $(FLASH_IMAGE) to the configuration device..."
+	$(call _require_flash_device)
+	@test -n "$(_flash_pgm_op)" || { \
+	    echo "[QUARTUS] error: FLASH_FORMAT=$(FLASH_FORMAT) is not something quartus_pgm writes."; \
+	    echo "[QUARTUS]        Use jic or pof."; exit 1; }
+	$(QUARTUS_PGM) -m jtag -o "$(_flash_pgm_op);$(FLASH_IMAGE)"
+
+$(FLASH_IMAGE): cfgmem
 
 # ── Program device ────────────────────────────────────────────────────────────
 program:
