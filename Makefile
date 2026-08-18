@@ -66,6 +66,14 @@ BUILD_DIR    ?= build
 TOOLCHAIN    ?= gcc
 SRC_ROOT     ?= .
 
+# ── SCAN_EXCLUDE: directories the scan must not descend into ─────────────────
+# Paths relative to SRC_ROOT. A project that vendors a self-contained
+# sub-project (its own project.mk and its own sources) lists it here, otherwise
+# the scan sweeps that sub-project's sources into THIS build — two main()s, or
+# an entity compiled into the wrong library. The scan script already accepts
+# several excludes; this is the project-level one, alongside the template's own.
+SCAN_FIND_EXCLUDE = $(foreach d,$(SCAN_EXCLUDE),-not -path "$(SRC_ROOT)/$(d)/*")
+
 # ── Source variable initialisation (must precede sub-makefile includes) ───────
 # Using := so that += in each Makefile.mk expands $(wildcard) immediately,
 # giving an up-to-date file list on every make invocation.
@@ -87,6 +95,7 @@ else
         -not -path "*/scripts/*" \
         -not -path "*/$(BUILD_DIR)/*" \
         $(TEMPLATE_FIND_EXCLUDE) \
+        $(SCAN_FIND_EXCLUDE) \
         2>$(NULL))
 endif
 

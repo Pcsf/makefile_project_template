@@ -21,6 +21,15 @@ TOOLCHAIN := gcc
 # Directory where the scan script starts (default: project root ".")
 SRC_ROOT := .
 
+# Directories the scan must NOT descend into, relative to SRC_ROOT. Use this for
+# a vendored sub-project that has its own project.mk — without it, its sources
+# are swept into this build.
+# SCAN_EXCLUDE := path/to/subproject
+
+# This repo's own Nios II example is a self-contained project; keep its sources
+# out of the template's default build.
+SCAN_EXCLUDE := example/nios2
+
 # ── VHDL_SRCS_DIR: directory-level compilation order (Layer 1) ───────────────
 # VHDL compilation order matters: packages must precede their users, entities
 # must precede their instantiators.  Three layers handle this:
@@ -112,3 +121,39 @@ QUARTUS_STA  := quartus_sta
 QUARTUS_PART := EP4CE6E22C8       # Target device
 QUARTUS_TOP  := top               # Top-level entity
 QUARTUS_FAMILY := "Cyclone IV E"
+QUARTUS_PGM  := quartus_pgm
+
+# ── Platform Designer (Qsys) ──────────────────────────────────────────────────
+# Only needed when the design contains a Platform Designer system. Each entry is
+# a .qsys file; 'make qsys' generates its HDL under BUILD_DIR and the QSF picks
+# the result up as a QIP_FILE. Generated HDL is never scanned as source.
+#
+# The system is copied into BUILD_DIR before generation, because qsys-generate
+# writes the .sopcinfo next to the .qsys it is handed — generating in place
+# drops a large generated file into the source tree on every build.
+#
+# QSYS_SYSTEMS := system/my_system.qsys
+# QSYS_LANG    := VERILOG            # VERILOG | VHDL
+
+# ── Nios II software ──────────────────────────────────────────────────────────
+# Only needed when a Platform Designer system contains a Nios II processor.
+# 'make nios-bsp' generates the board support package and 'make nios-apps'
+# builds each application into an .elf, both under BUILD_DIR.
+#
+# NIOS_<app>_SOPCINFO is derived when exactly ONE system is declared. With
+# several it is required: an application built against the wrong memory map
+# links cleanly and then does not run, so the framework will not guess.
+#
+# NIOS_APPS          := hello
+# NIOS_hello_SRC_DIR := sw/hello
+# NIOS_hello_SOPCINFO := $(BUILD_DIR)/qsys/my_system/my_system.sopcinfo
+# NIOS_BSP_TYPE      := hal          # per-app override: NIOS_hello_BSP_TYPE
+# NIOS_hello_BSP_SETTINGS := \
+#     hal.enable_small_c_library=true \
+#     hal.enable_reduced_device_drivers=true
+# NIOS_hello_CFLAGS  := -O2
+#
+# NIOS2_SHELL — the nios2_command_shell.sh wrapper. Derived from
+# QUARTUS_ROOTDIR, which the Quartus environment exports. Set it only when the
+# Nios II tools live somewhere the derivation cannot reach.
+# NIOS2_SHELL := /path/to/nios2eds/nios2_command_shell.sh
