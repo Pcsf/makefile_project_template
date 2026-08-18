@@ -665,6 +665,29 @@ QSYS_DEPS        := rtl/my_component.vhd
 they reference cannot be — a `_hw.tcl` may point anywhere — so name those
 sources in `QSYS_DEPS`.
 
+### A system built from a script — `QSYS_<system>_SCRIPT`
+
+A `.qsys` can be authored by hand or built by a Tcl script. When a script is
+the source, name it and the `.qsys` becomes a build product:
+
+```make
+QSYS_SYSTEMS            := system/my_sys.qsys
+QSYS_my_sys_SCRIPT      := system/build_system.tcl
+```
+
+Without this the `.qsys` is just a file that happens to exist. Editing the
+script changes nothing, the build keeps using whatever the file last contained,
+and the two drift apart silently — the same failure as a stale component copy,
+one level up.
+
+**`qsys-script` continues past errors and saves anyway.** A run that cannot
+resolve a component writes a system missing exactly the connections it could
+not make, and signals the problem only through its exit code. Building from
+that file afterwards produces warnings that point at the design rather than at
+the generation that produced it. The wrapper therefore builds in a temporary
+directory and only replaces the real file on success, so a failed run leaves
+the previous system intact.
+
 ### The tool-path trap
 
 Sourcing the Quartus environment puts `quartus/linux64` and the simulator on
