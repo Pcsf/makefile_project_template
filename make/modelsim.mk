@@ -25,6 +25,10 @@ VLIB ?= vlib
 
 VSIM_WORKDIR := $(BUILD_DIR)/modelsim_work
 
+# GHDL and vcom spell VHDL standards differently. Questa uses the full year
+# for VHDL-2002/2008, while GHDL_STD is configured as 02/08.
+VCOM_STD_FLAG := $(if $(filter 08,$(GHDL_STD)),-2008,$(if $(filter 00 02,$(GHDL_STD)),-2002,-$(GHDL_STD)))
+
 .PHONY: all compile simulate _help_modelsim
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
@@ -45,7 +49,9 @@ $(VSIM_WORKDIR):
 $(VSIM_WORKDIR)/$(VSIM_WORK)/_info: | $(VSIM_WORKDIR)
 	@echo "[MSIM] Creating work library..."
 	$(VLIB) $(VSIM_WORKDIR)/$(VSIM_WORK)
-	$(VMAP) $(VSIM_WORK) $(VSIM_WORKDIR)/$(VSIM_WORK)
+	cd $(VSIM_WORKDIR) && $(VMAP) -c
+	$(VMAP) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
+	    $(VSIM_WORK) $(abspath $(VSIM_WORKDIR)/$(VSIM_WORK))
 
 # ── Compile ───────────────────────────────────────────────────────────────────
 compile: $(VSIM_WORKDIR)/$(VSIM_WORK)/_info
@@ -53,12 +59,12 @@ ifneq ($(strip $(VHDL_SRCS)),)
 	@echo "[MSIM] VHDL pre-pass ($(words $(VHDL_SRCS)) file(s), errors silenced)..."
 	@$(foreach f,$(VHDL_SRCS),\
 	    $(VCOM) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
-	            -work $(VSIM_WORK) -$(GHDL_STD) $(f) 2>/dev/null;) true
+	            -work $(VSIM_WORK) $(VCOM_STD_FLAG) $(f) 2>/dev/null;) true
 	@echo "[MSIM] VHDL final pass:"
 	@$(foreach f,$(VHDL_SRCS),\
 	    printf '  [VCOM] %s\n' '$(f)' && \
 	    $(VCOM) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
-	            -work $(VSIM_WORK) -$(GHDL_STD) $(f) || \
+	            -work $(VSIM_WORK) $(VCOM_STD_FLAG) $(f) || \
 	    { echo '[MSIM] FAILED on: $(f)'; \
 	      echo '[MSIM] Fix: check .compile_order or set VHDL_SRCS in project.mk'; \
 	      exit 1; };)
