@@ -314,7 +314,8 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 | `make elaborate` | `ghdl` | Build simulation binary |
 | `make simulate` | `ghdl` | Run simulation, emit VCD |
 | `make compile` | `modelsim` | Compile HDL into work library |
-| `make simulate` | `modelsim` | Run simulation with vsim |
+| `make simulate` | `modelsim` | Run simulation with vsim in batch mode |
+| `make sim-gui` | `modelsim` | Compile and open the testbench in the simulator GUI |
 | `make synth` | `vivado`, `quartus` | Synthesis only |
 | `make impl` | `vivado` | Implementation (place & route) |
 | `make bitstream` | `vivado` | Full flow to bitstream |

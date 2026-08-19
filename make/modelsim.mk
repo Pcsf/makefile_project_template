@@ -29,7 +29,7 @@ VSIM_WORKDIR := $(BUILD_DIR)/modelsim_work
 # for VHDL-2002/2008, while GHDL_STD is configured as 02/08.
 VCOM_STD_FLAG := $(if $(filter 08,$(GHDL_STD)),-2008,$(if $(filter 00 02,$(GHDL_STD)),-2002,-$(GHDL_STD)))
 
-.PHONY: all compile simulate _help_modelsim
+.PHONY: all compile simulate sim-gui _help_modelsim
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_modelsim
@@ -38,7 +38,8 @@ _help_modelsim:
 	@echo ""
 	@echo "  ModelSim targets:"
 	@echo "    compile    Compile the sources into the work library"
-	@echo "    simulate   Run VSIM_TOP — this is what 'all' builds"
+	@echo "    simulate   Run VSIM_TOP in batch — this is what 'all' builds"
+	@echo "    sim-gui    Open VSIM_TOP in the simulator GUI"
 
 all: simulate
 
@@ -88,6 +89,12 @@ simulate: compile
 	$(VSIM) -c $(VSIM_FLAGS) \
 	    -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
 	    -do "run -all; quit -f" \
+	    $(VSIM_WORK).$(VSIM_TOP)
+
+sim-gui: compile
+	@echo "[MSIM] Opening '$(VSIM_WORK).$(VSIM_TOP)' in the simulator GUI..."
+	$(VSIM) $(VSIM_FLAGS) \
+	    -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
 	    $(VSIM_WORK).$(VSIM_TOP)
 
 $(BUILD_DIR)/$(PROJECT_NAME): simulate
