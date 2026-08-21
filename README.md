@@ -486,6 +486,34 @@ VHDL_SRCS_DIR := \
 This replaces what the per-directory `Makefile.mk` fragments accumulated, so
 **all** VHDL directories must appear in the list when this variable is set.
 
+### Named VHDL libraries
+
+Use named libraries for external verification or vendor sources that cannot be
+compiled into `work`. The list declares the libraries; each library supplies an
+ordered source list and optional dependencies and simulator-specific flags.
+
+```makefile
+VHDL_LIBS := uvvm_util bitvis_vip_spi
+
+VHDL_LIB_uvvm_util_SRCS := \
+    vendor/uvvm/uvvm_util/src/types_pkg.vhd \
+    vendor/uvvm/uvvm_util/src/adaptations_pkg.vhd
+VHDL_LIB_uvvm_util_GHDL_FLAGS := -frelaxed-rules
+VHDL_LIB_uvvm_util_VCOM_FLAGS := -suppress 1236,1346
+
+VHDL_LIB_bitvis_vip_spi_SRCS := \
+    vendor/uvvm/bitvis_vip_spi/src/spi_bfm_pkg.vhd
+VHDL_LIB_bitvis_vip_spi_DEPS := uvvm_util
+```
+
+GHDL analyses each named library into `BUILD_DIR/ghdl_work` and adds that
+location to its library search path. ModelSim/Questa creates and maps every
+library in the build-local `modelsim.ini`. Project sources remain in `work`.
+
+`VHDL_LIB_<name>_SRCS` is an ordered list. A library target depends on every
+library named by `VHDL_LIB_<name>_DEPS`, so parallel `make` cannot compile a
+consumer before its provider.
+
 ---
 
 ## Configuring project.mk

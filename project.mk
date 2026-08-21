@@ -52,6 +52,18 @@ SCAN_EXCLUDE := example/nios2 example/niosv
 #     hdl/rtl      \
 #     hdl/top
 
+# ── Named VHDL libraries ──────────────────────────────────────────────────────
+# External verification or vendor sources often require libraries other than
+# work. Libraries are built in dependency order before the project sources.
+# Per-library flags are optional.
+#
+# VHDL_LIBS := uvvm_util bitvis_vip_spi
+# VHDL_LIB_uvvm_util_SRCS := vendor/uvvm/uvvm_util/src/types_pkg.vhd ...
+# VHDL_LIB_bitvis_vip_spi_SRCS := vendor/uvvm/bitvis_vip_spi/src/spi_bfm_pkg.vhd
+# VHDL_LIB_bitvis_vip_spi_DEPS := uvvm_util
+# VHDL_LIB_uvvm_util_GHDL_FLAGS := -frelaxed-rules
+# VHDL_LIB_uvvm_util_VCOM_FLAGS := -suppress 1236,1346
+
 # ── GNU C / C++ settings ──────────────────────────────────────────────────────
 CC       := gcc
 CXX      := g++

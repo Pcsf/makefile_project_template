@@ -61,6 +61,8 @@ info:
 	@$(foreach f,$(CXX_SRCS),echo "    $(f)";)
 	@echo "  VHDL sources ($(words $(VHDL_SRCS))):"
 	@$(foreach f,$(VHDL_SRCS),echo "    $(f)";)
+	@echo "  Named VHDL libraries ($(words $(VHDL_LIBS))):"
+	@$(foreach lib,$(VHDL_LIBS),echo "    $(lib) ($(words $(VHDL_LIB_$(lib)_SRCS)) source(s); deps: $(or $(VHDL_LIB_$(lib)_DEPS),none))";)
 	@echo "  Verilog/SV sources ($(words $(V_SRCS))):"
 	@$(foreach f,$(V_SRCS),echo "    $(f)";)
 	@echo "  ASM sources ($(words $(ASM_SRCS))):"
