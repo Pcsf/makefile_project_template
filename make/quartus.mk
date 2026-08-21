@@ -356,6 +356,8 @@ FLASH_FORMAT      ?= jic
 FLASH_COMPRESSION ?= on
 FLASH_VERIFY      ?= 1
 FLASH_IMAGE       ?= $(QUARTUS_PROJDIR)/output_files/$(PROJECT_NAME).$(FLASH_FORMAT)
+FLASH_COF         ?=
+FLASH_COF_DEPS    ?=
 
 _FLASH_OPT := $(QUARTUS_PROJDIR)/cpf_options.txt
 
@@ -384,11 +386,23 @@ endef
 $(_FLASH_OPT): | $(QUARTUS_PROJDIR)
 	@echo "bitstream_compression=$(FLASH_COMPRESSION)" > $@
 
+ifneq ($(strip $(FLASH_COF)),)
+cfgmem: $(FLASH_COF) $(FLASH_COF_DEPS)
+	@echo "[QUARTUS] Building $(FLASH_FORMAT) image from $(FLASH_COF)..."
+	$(if $(filter rbf,$(FLASH_FORMAT)),,$(call _require_flash_device))
+	@rm -f "$(FLASH_IMAGE)"
+	$(QUARTUS_CPF) -c $(FLASH_COF)
+	@test -f "$(FLASH_IMAGE)" || { \
+	    echo "[QUARTUS] error: $(FLASH_COF) did not produce $(FLASH_IMAGE)."; \
+	    exit 1; }
+	@echo "[QUARTUS] $(FLASH_IMAGE)"
+else
 cfgmem: $(SOF_FILE) $(_FLASH_OPT)
 	@echo "[QUARTUS] Building $(FLASH_FORMAT) image..."
 	$(if $(filter rbf,$(FLASH_FORMAT)),,$(call _require_flash_device))
 	$(QUARTUS_CPF) -o $(_FLASH_OPT) -c $(_flash_cpf_args) $(SOF_FILE) $(FLASH_IMAGE)
 	@echo "[QUARTUS] $(FLASH_IMAGE)"
+endif
 
 flash: $(FLASH_IMAGE)
 	@echo "[QUARTUS] Writing $(FLASH_IMAGE) to the configuration device..."

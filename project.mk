@@ -151,6 +151,8 @@ QUARTUS_PGM  := quartus_pgm
 #                                   # small configuration device
 # FLASH_VERIFY      := 1            # read-back verify; on by default
 # FLASH_IMAGE       :=              # defaults to the build's own output
+# FLASH_COF         :=              # optional multi-image conversion file
+# FLASH_COF_DEPS    :=              # SOFs and other files named by FLASH_COF
 
 # ── Platform Designer (Qsys) ──────────────────────────────────────────────────
 # Only needed when the design contains a Platform Designer system. Each entry is

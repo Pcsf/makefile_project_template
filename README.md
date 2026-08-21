@@ -619,6 +619,18 @@ FLASH_VERIFY      := 1           # on by default
 one because building is cheap and repeatable and writing flash is neither — the
 same split the Xilinx `boot-image` / `flash-boot` pair uses.
 
+A multi-image or remote-update layout is described by a Quartus conversion file:
+
+```make
+FLASH_IMAGE    := images/recovery.jic
+FLASH_COF      := images/two_image_jic.cof
+FLASH_COF_DEPS := images/recovery.sof images/application.sof
+```
+
+With `FLASH_COF` set, `cfgmem` runs that file instead of silently rebuilding
+`FLASH_IMAGE` from the current single SOF. The conversion file must name the
+same output as `FLASH_IMAGE`; `cfgmem` rejects a missing output.
+
 `make flash-erase` erases the device and blank-checks it in the same pass. It
 still takes an image, because the loader that reaches the configuration device
 is built from it — nothing of the image is written. **In `quartus_pgm` option
