@@ -18,18 +18,21 @@
 # Defaulted rather than required. Without a default an unset variable expands to
 # nothing and the recipe runs its own first flag as the command, which fails as
 # "not found" and points at the flag rather than at the missing tool.
-VSIM ?= vsim
-VCOM ?= vcom
-VLOG ?= vlog
-VLIB ?= vlib
+VSIM      ?= vsim
+VCOM      ?= vcom
+VLOG      ?= vlog
+VLIB      ?= vlib
+VMAP      ?= vmap
+VSIM_WORK ?= work
 
 VSIM_WORKDIR := $(BUILD_DIR)/modelsim_work
+VHDL_LIB_COMPILE_TARGETS := $(addprefix compile-lib-,$(VHDL_LIBS))
 
 # GHDL and vcom spell VHDL standards differently. Questa uses the full year
 # for VHDL-2002/2008, while GHDL_STD is configured as 02/08.
 VCOM_STD_FLAG := $(if $(filter 08,$(GHDL_STD)),-2008,$(if $(filter 00 02,$(GHDL_STD)),-2002,-$(GHDL_STD)))
 
-.PHONY: all compile simulate sim-gui _help_modelsim
+.PHONY: all compile compile-vhdl-libs simulate sim sim-gui _help_modelsim $(VHDL_LIB_COMPILE_TARGETS)
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_modelsim
@@ -39,9 +42,11 @@ _help_modelsim:
 	@echo "  ModelSim targets:"
 	@echo "    compile    Compile the sources into the work library"
 	@echo "    simulate   Run VSIM_TOP in batch — this is what 'all' builds"
+	@echo "    sim        Alias for simulate"
 	@echo "    sim-gui    Open VSIM_TOP in the simulator GUI"
 
 all: simulate
+sim: simulate
 
 $(VSIM_WORKDIR):
 	$(MKDIR) $(VSIM_WORKDIR)
@@ -54,8 +59,30 @@ $(VSIM_WORKDIR)/$(VSIM_WORK)/_info: | $(VSIM_WORKDIR)
 	$(VMAP) -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
 	    $(VSIM_WORK) $(abspath $(VSIM_WORKDIR)/$(VSIM_WORK))
 
+# ── Named VHDL libraries ──────────────────────────────────────────────────────
+define MSIM_VHDL_LIB_template
+$$(VSIM_WORKDIR)/$(1)/_info: $$(VSIM_WORKDIR)/$$(VSIM_WORK)/_info
+	@echo "[MSIM] Creating library '$(1)'..."
+	$$(VLIB) $$(VSIM_WORKDIR)/$(1)
+	$$(VMAP) -modelsimini $$(VSIM_WORKDIR)/modelsim.ini \
+	    $(1) $$(abspath $$(VSIM_WORKDIR)/$(1))
+
+compile-lib-$(1): $$(addprefix compile-lib-,$$(VHDL_LIB_$(1)_DEPS)) $$(VSIM_WORKDIR)/$(1)/_info
+	@test -n "$$(strip $$(VHDL_LIB_$(1)_SRCS))" || { echo "[MSIM] No sources configured for VHDL library '$(1)'"; exit 1; }
+	@echo "[MSIM] Compiling library '$(1)' ($$(words $$(VHDL_LIB_$(1)_SRCS)) file(s))..."
+	@$$(foreach f,$$(VHDL_LIB_$(1)_SRCS),\
+	    printf '  [VCOM:$(1)] %s\n' '$$(f)' && \
+	    $$(VCOM) -modelsimini $$(VSIM_WORKDIR)/modelsim.ini \
+	        -work $(1) $$(VCOM_STD_FLAG) $$(VHDL_LIB_$(1)_VCOM_FLAGS) $$(f) || \
+	    { echo '[MSIM] FAILED on: $$(f) (library $(1))'; exit 1; };)
+endef
+
+$(foreach lib,$(VHDL_LIBS),$(eval $(call MSIM_VHDL_LIB_template,$(lib))))
+
+compile-vhdl-libs: $(VHDL_LIB_COMPILE_TARGETS)
+
 # ── Compile ───────────────────────────────────────────────────────────────────
-compile: $(VSIM_WORKDIR)/$(VSIM_WORK)/_info
+compile: compile-vhdl-libs $(VSIM_WORKDIR)/$(VSIM_WORK)/_info
 ifneq ($(strip $(VHDL_SRCS)),)
 	@echo "[MSIM] VHDL pre-pass ($(words $(VHDL_SRCS)) file(s), errors silenced)..."
 	@$(foreach f,$(VHDL_SRCS),\
