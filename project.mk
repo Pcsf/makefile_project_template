@@ -30,6 +30,44 @@ SRC_ROOT := .
 # their sources out of the template's default build.
 SCAN_EXCLUDE := example/nios2 example/niosv
 
+# ── Tests: `make test` and its verdict ────────────────────────────────────────
+# `make test` exits non-zero when the checks failed. How it learns that depends
+# on the runner.
+#
+# A runner that reports honestly needs only its command, and the framework takes
+# the exit status as the verdict:
+#
+# TEST_CMD := ./build/my_tests
+#
+# A runner that always exits zero, which most HDL simulators in batch mode do,
+# has its transcript read instead. Each simulator toolchain already defaults
+# TEST_FAIL_PATTERN to its own rendering of VHDL severities, so an assert/report
+# testbench needs nothing set here.
+#
+# A verification library that counts its own alerts is the case that does need
+# it: the library reports in a summary line and raises no severity at all, so
+# the simulator exits zero with every check failed. Name the library's words:
+#
+# TEST_FAIL_PATTERN := Simulation FAILED
+#
+# TEST_PASS_PATTERN must appear or the run fails. It has no default, because a
+# completion marker is a project convention. Declaring one is what catches the
+# run that died quietly partway through, leaving no failing check to match:
+#
+# TEST_PASS_PATTERN := TEST COMPLETE
+#
+# TEST_CHECK=0 skips the verdict, for a run that is EXPECTED to fail: a red
+# phase asserting the inverse itself against the same transcript. Pass it on the
+# command line. A project that sets it here has switched the check off.
+#
+# `make test-report` runs the checks and writes JUnit XML per test case, which
+# is what lets a requirement bind to one named test rather than to the whole
+# run. The command is the project's, and receives TEST_REPORT in its
+# environment; anything that emits JUnit XML works.
+#
+# TEST_REPORT_CMD := ./run_tests.sh
+# TEST_REPORT     := $(BUILD_DIR)/test-results.xml
+
 # ── VHDL_SRCS_DIR: directory-level compilation order (Layer 1) ───────────────
 # VHDL compilation order matters: packages must precede their users, entities
 # must precede their instantiators.  Three layers handle this:
