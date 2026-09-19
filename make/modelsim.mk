@@ -32,7 +32,7 @@ VHDL_LIB_COMPILE_TARGETS := $(addprefix compile-lib-,$(VHDL_LIBS))
 # for VHDL-2002/2008, while GHDL_STD is configured as 02/08.
 VCOM_STD_FLAG := $(if $(filter 08,$(GHDL_STD)),-2008,$(if $(filter 00 02,$(GHDL_STD)),-2002,-$(GHDL_STD)))
 
-.PHONY: all compile compile-vhdl-libs simulate sim sim-gui _help_modelsim $(VHDL_LIB_COMPILE_TARGETS)
+.PHONY: all compile compile-vhdl-libs simulate sim sim-gui test _help_modelsim $(VHDL_LIB_COMPILE_TARGETS)
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_modelsim
@@ -44,9 +44,41 @@ _help_modelsim:
 	@echo "    simulate   Run VSIM_TOP in batch — this is what 'all' builds"
 	@echo "    sim        Alias for simulate"
 	@echo "    sim-gui    Open VSIM_TOP in the simulator GUI"
+	@echo "    test       Run VSIM_TOP in batch and render a verdict"
 
 all: simulate
 sim: simulate
+
+# ── The test verdict ──────────────────────────────────────────────────────────
+# `simulate` is the developer-facing run. `test` is the machine-facing one, and
+# its exit status is the verdict.
+#
+# The simulator's own status cannot supply that: the batch run ends in
+# `quit -f`, which sets no exit code, so a run where every check failed and a
+# clean run are indistinguishable by status. The transcript is therefore the
+# source of truth, the same way it is for any runner that exits zero
+# regardless of outcome.
+#
+# The default fail pattern is the simulator's own rendering of VHDL severities,
+# so a testbench using assert/report is covered without adopting a convention.
+# A verification library that counts its own alerts and reports in a summary
+# line raises no severity at all: declare that project's TEST_FAIL_PATTERN or
+# TEST_PASS_PATTERN for it.
+TEST_LOG          ?= $(BUILD_DIR)/test_$(VSIM_TOP).log
+TEST_FAIL_PATTERN ?= \*\* (Error|Fatal):
+
+TOOLCHAIN_HAS_TEST := 1
+
+test: compile
+	@echo "[MSIM] Testing '$(VSIM_WORK).$(VSIM_TOP)'..."
+	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
+	@$(VSIM) -c $(VSIM_FLAGS) \
+	    -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
+	    -l $(abspath $(TEST_LOG)) \
+	    -do "run -all; quit -f" \
+	    $(VSIM_WORK).$(VSIM_TOP) > /dev/null 2>&1 || true
+	@cat "$(abspath $(TEST_LOG))" 2>/dev/null || true
+	$(call _test_verdict,MSIM)
 
 $(VSIM_WORKDIR):
 	$(MKDIR) $(VSIM_WORKDIR)

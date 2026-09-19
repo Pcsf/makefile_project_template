@@ -206,32 +206,16 @@ XSIM_FAIL_PATTERN ?= ^(Error|Failure|Fatal):|^ERROR:
 XSIM_PASS_PATTERN ?=
 XSIM_CHECK        ?= 1
 
-# An empty transcript is a failure in its own right: it means xsim never ran, or
-# died before printing anything, and neither pattern can speak to a file with
-# nothing in it.
-define _xsim_verdict
-	@log='$(abspath $(XSIM_LOG))'; \
-	if [ ! -s "$$log" ]; then \
-	    echo "[XSIM] FAILED — no transcript at $(XSIM_LOG); the simulation did not run."; \
-	    exit 1; \
-	fi; \
-	if grep -Eq '$(XSIM_FAIL_PATTERN)' "$$log"; then \
-	    echo "[XSIM] FAILED — transcript matched XSIM_FAIL_PATTERN:"; \
-	    grep -E '$(XSIM_FAIL_PATTERN)' "$$log" | head -20 | sed 's/^/[XSIM]     /'; \
-	    echo "[XSIM] Full transcript: $(XSIM_LOG)"; \
-	    exit 1; \
-	fi; \
-	$(if $(strip $(XSIM_PASS_PATTERN)),\
-	if ! grep -Eq '$(XSIM_PASS_PATTERN)' "$$log"; then \
-	    echo "[XSIM] FAILED — XSIM_PASS_PATTERN never appeared: $(XSIM_PASS_PATTERN)"; \
-	    echo "[XSIM] The run ended before the testbench reported completion."; \
-	    echo "[XSIM] Full transcript: $(XSIM_LOG)"; \
-	    exit 1; \
-	fi; ,\
-	echo "[XSIM] NOTE: XSIM_PASS_PATTERN is unset — a run that stops early still passes."; \
-	echo "[XSIM]       Declare the testbench's completion marker in project.mk."; ) \
-	echo "[XSIM] PASSED — transcript checked ($(XSIM_LOG))."
-endef
+# The verdict itself is the framework's, in make/verdict.mk. The XSIM_* names
+# stay because projects already set them; they are this toolchain's spelling of
+# the shared variables.
+TEST_LOG          ?= $(XSIM_LOG)
+TEST_FAIL_PATTERN ?= $(XSIM_FAIL_PATTERN)
+TEST_PASS_PATTERN ?= $(XSIM_PASS_PATTERN)
+TEST_CHECK        ?= $(XSIM_CHECK)
+
+TOOLCHAIN_HAS_TEST := 1
+
 
 # ── Derived source sets ───────────────────────────────────────────────────────
 _vivado_synth_vhdl = $(filter-out $(VIVADO_SIM_SRCS),$(VHDL_SRCS))
@@ -259,7 +243,7 @@ _vivado_preset_dict   = $(if $(strip $(PRESET_SCRIPT)),\
 # Full CONFIG list for an IP or BD cell: preset first, explicit CONFIG second.
 _vivado_cfg = $(if $(strip $(VIVADO_IP_$(1)_PRESET)),$(call _vivado_preset_dict,$(1)) )$(subst =, ,$(VIVADO_IP_$(1)_CONFIG))
 
-.PHONY: all params synth impl bitstream xsa \
+.PHONY: all params synth impl bitstream xsa test \
         project project-gui gui bd-draft bd-gui bd-export \
         sim sim-gui sim-elab vitis-platform vitis-apps vitis-run program \
         _help_vivado
@@ -462,11 +446,13 @@ sim-elab: | $(XSIM_DIR)
 sim: sim-elab
 	@echo "[XSIM] Running simulation (batch)..."
 	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -runall 2>&1 | tee $(abspath $(XSIM_LOG))
-ifeq ($(XSIM_CHECK),0)
-	@echo "[XSIM] Verdict SKIPPED (XSIM_CHECK=0). Transcript: $(XSIM_LOG)"
-else
-	$(_xsim_verdict)
-endif
+	$(call _test_verdict,XSIM)
+
+# `test` is the same batch run with the verdict made non-optional: TEST_CHECK
+# exists for a red phase that asserts the inverse itself, and a target whose
+# whole purpose is the verdict must not honour it.
+test: TEST_CHECK := 1
+test: sim
 
 # No verdict here: the GUI run is interactive and the operator is the check.
 sim-gui: sim-elab
