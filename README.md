@@ -305,6 +305,8 @@ the symbol rather than leaving a working build of the wrong firmware.
 | `make distclean` | Remove `build/` **and** all generated `Makefile.mk` files |
 | `make info` | Show discovered sources and current settings |
 | `make help` | Print the core targets, then those of the selected toolchain |
+| `make test` | Run the project's checks; the exit status is the verdict |
+| `make test-report` | Run them and write JUnit XML per test case |
 
 Toolchain-specific targets (available when the relevant toolchain is selected):
 
@@ -373,6 +375,82 @@ deliberately.
 project — recreating one discards every IDE edit that has not been exported.
 
 ---
+
+## The `test` contract
+
+`make test` means one thing in every project on this framework, whatever the
+language: it ran the project's checks, and **its exit status is the truth about
+them**. Nothing else here makes that promise. `all` builds and `sim` simulates,
+and both can succeed while every check fails.
+
+Two kinds of runner, one target:
+
+- **The runner reports honestly.** Declare `TEST_CMD` in `project.mk`; the
+  generic target in `common.mk` builds, runs it, and takes its exit status as
+  the verdict. This covers `gcc` and `gxx` with no toolchain-specific code.
+
+- **The runner does not.** A batch script that ends without setting a code, or
+  a simulator that prints a failure and exits zero, has to have its transcript
+  read. The toolchain defines its own `test:` recipe, sets
+  `TOOLCHAIN_HAS_TEST := 1`, and calls the shared verdict in `make/verdict.mk`.
+
+| Variable | Meaning |
+|---|---|
+| `TEST_CMD` | Command that runs the checks (generic target only) |
+| `TEST_LOG` | Transcript the verdict reads |
+| `TEST_FAIL_PATTERN` | Extended regex; any match fails the run |
+| `TEST_PASS_PATTERN` | Extended regex that must appear, or the run fails |
+| `TEST_CHECK` | `0` skips the verdict, for a run expected to fail |
+
+Each simulator toolchain supplies a default `TEST_FAIL_PATTERN` matching its own
+rendering of VHDL severities, so a testbench using `assert`/`report` is covered
+without adopting any convention. **A verification library that counts its own
+alerts is not covered by it.** It reports in a summary line and raises no
+severity at all, so the simulator exits zero with every check failed. Declare
+that project's own patterns:
+
+```make
+# project.mk
+TEST_FAIL_PATTERN := Simulation FAILED
+TEST_PASS_PATTERN := Simulation SUCCESS
+```
+
+`TEST_PASS_PATTERN` is empty by default because a completion marker is a project
+convention, not something the framework can know. Declaring one is what catches
+a run that died quietly partway through, leaving no failing check to match.
+
+Two refusals are deliberate. `make test` with neither a `TEST_CMD` nor a
+toolchain recipe fails rather than passing, because a silent zero is
+indistinguishable from a suite that ran and passed. And a pattern `grep` cannot
+read fails the run rather than counting as "no match": a pattern that matches
+nothing would otherwise pass everything.
+
+The verdict is self-tested. `tests/verdict.sh` exercises it against a passing
+transcript, a failing one, a missing one, an empty one, an unusable pattern, and
+each toolchain default, because a check proven only against a passing run has
+not been proven at all.
+
+### Per-test-case results — `make test-report`
+
+`make test` answers one question for the whole suite. `make test-report` answers
+it per test case, by writing JUnit XML to `$(TEST_REPORT)`, default
+`$(BUILD_DIR)/test-results.xml`. That is what lets something outside the build
+bind one requirement to one named test rather than to the whole run.
+
+The framework does not know how the report is produced, and must not: a VHDL
+test framework, a Python one, and a language's own runner all emit JUnit XML.
+The project declares the command, which receives `TEST_REPORT` in its
+environment; the framework fixes the path and checks that a JUnit document was
+actually written there.
+
+```make
+# project.mk
+TEST_REPORT_CMD := ./run_tests.sh
+```
+
+It is independent of `test` on purpose. A toolchain may implement one, both, or
+neither, a report generator usually drives its own compilation, and `test` never
+depends on a report existing.
 
 ## How source discovery and VHDL ordering work
 
@@ -970,8 +1048,10 @@ Two things that are easy to get wrong here, both learned by hitting them:
 
 ### The simulation verdict — why `make sim` reads the transcript
 
-XSim's exit status is not a verdict, so `make sim` does not use it. Measured on
-2021.2:
+This toolchain is one instance of [The `test` contract](#the-test-contract); the
+mechanism lives in `make/verdict.mk` and the `XSIM_*` names below are this
+toolchain's spelling of the shared variables. XSim's exit status is not a
+verdict, so neither `make sim` nor `make test` uses it. Measured on 2021.2:
 
 | Run | Transcript | `xsim -runall` exit |
 |---|---|---|
@@ -1199,7 +1279,13 @@ Alternatively, use [Git Bash](https://git-scm.com/downloads) or WSL and run
 2. Define:
    - An `all:` phony target.
    - A recipe for `$(BUILD_DIR)/$(PROJECT_NAME)` (may be an alias/phony).
-3. Set `TOOLCHAIN := <name>` in `project.mk`.
+3. Decide how it takes part in `make test`. A toolchain whose runner exits
+   non-zero on failure needs nothing: the generic target runs the project's
+   `TEST_CMD`. One whose runner does not defines its own `test:` recipe and sets
+   `TOOLCHAIN_HAS_TEST := 1`, and that recipe keeps two promises — `test` exits
+   non-zero when the checks failed, and it reads its verdict from
+   `make/verdict.mk` rather than inventing one. See [The `test` contract](#the-test-contract).
+4. Set `TOOLCHAIN := <name>` in `project.mk`.
 
 ---
 

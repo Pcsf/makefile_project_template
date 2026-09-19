@@ -33,7 +33,7 @@ GHDL_FLAGS         := --std=$(GHDL_STD) --workdir=$(GHDL_WORKDIR) \
 
 VHDL_LIB_ANALYZE_TARGETS := $(addprefix analyze-lib-,$(VHDL_LIBS))
 
-.PHONY: all analyze analyze-vhdl-libs elaborate simulate sim _help_ghdl $(VHDL_LIB_ANALYZE_TARGETS)
+.PHONY: all analyze analyze-vhdl-libs elaborate simulate sim test _help_ghdl $(VHDL_LIB_ANALYZE_TARGETS)
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_ghdl
@@ -45,6 +45,7 @@ _help_ghdl:
 	@echo "    elaborate  Elaborate GHDL_TOP"
 	@echo "    simulate   Run the simulation — this is what 'all' builds"
 	@echo "    sim        Alias for simulate"
+	@echo "    test       Run the simulation and render a verdict"
 
 all: simulate
 sim: simulate
@@ -85,6 +86,46 @@ analyze: analyze-vhdl-libs | $(GHDL_WORKDIR)
 elaborate: analyze
 	@echo "[GHDL] Elaborating top entity '$(GHDL_TOP)'..."
 	$(GHDL) -e $(GHDL_FLAGS) $(GHDL_TOP)
+
+# ── The test verdict ──────────────────────────────────────────────────────────
+# `simulate` is the developer-facing run: it writes a VCD and reports what it
+# saw. `test` is the machine-facing one, and its exit status is the verdict.
+#
+# Two reasons the exit status of a bare run is not one, both measured on GHDL
+# 6.0.0. An assertion at 'severity error' prints its message, the run continues
+# to completion, and the process exits 0 — indistinguishable from a clean run.
+# And a verification library that counts its own alerts raises no assertion at
+# all; it reports in a summary line and ends normally, so the process exits 0
+# with every check failed.
+#
+# --assert-level=error closes the first case by making an error-severity
+# assertion stop the run. The second cannot be closed by a flag, because the
+# summary wording belongs to the library, not to GHDL: declare the project's
+# own TEST_FAIL_PATTERN or TEST_PASS_PATTERN for it.
+#
+#   GHDL_TEST_FLAGS  runtime flags for the verdict run. Lower it to
+#                    --assert-level=failure for a testbench that reports
+#                    several errors on purpose and checks the total itself.
+GHDL_TEST_FLAGS   ?= --assert-level=error
+TEST_LOG          ?= $(BUILD_DIR)/test_$(GHDL_TOP).log
+TEST_FAIL_PATTERN ?= \(assertion (error|failure)\)|\(report (error|failure)\)|^ghdl:error:
+
+TOOLCHAIN_HAS_TEST := 1
+
+# No VCD: this run exists to produce a verdict, not a waveform. Output is
+# captured rather than piped, because a pipe would discard the exit status that
+# --assert-level=error exists to set.
+test: elaborate
+	@echo "[GHDL] Testing '$(GHDL_TOP)'..."
+	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
+	@$(GHDL) -r $(GHDL_FLAGS) $(GHDL_TOP) $(GHDL_TEST_FLAGS) $(GHDL_SIM_FLAGS) \
+	    > "$(abspath $(TEST_LOG))" 2>&1; rc=$$?; \
+	cat "$(abspath $(TEST_LOG))"; \
+	if [ $$rc -ne 0 ] && [ "$(strip $(TEST_CHECK))" != "0" ]; then \
+	    echo "[GHDL] FAILED — the simulation exited $$rc."; \
+	    exit $$rc; \
+	fi
+	$(call _test_verdict,GHDL)
 
 # ── Simulation ────────────────────────────────────────────────────────────────
 simulate: elaborate
