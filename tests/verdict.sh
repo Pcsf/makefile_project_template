@@ -53,11 +53,36 @@ run fail "unusable fail pattern"         TEST_LOG="$work/green.log" TEST_FAIL_PA
 run fail "unusable pass pattern"         TEST_LOG="$work/green.log" TEST_PASS_PATTERN='^('
 
 # The toolchain defaults are data, and a truncated one looks like a working
-# pattern until a failing run walks past it.
-printf '# ** Error: tb.vhd(12): check failed\n' > "$work/msim.log"
-printf 'tb.vhd:9:5:@0ms:(assertion error): check failed\n' > "$work/ghdl.log"
-run fail "simulator default: transcript form A" TEST_LOG="$work/msim.log" TEST_FAIL_PATTERN='\*\* (Error|Fatal):'
-run fail "simulator default: transcript form B" TEST_LOG="$work/ghdl.log" TEST_FAIL_PATTERN='\(assertion (error|failure)\)|\(report (error|failure)\)|^ghdl:error:'
+# pattern until a failing run walks past it. Each default is read from the file
+# that ships it, then shown every severity its simulator can print: the serious
+# ones must fail the run and the informational ones must not.
+default_of() { # default_of <file> <variable>
+    sed -n "s/^$2 ?= //p" "$here/../make/$1"
+}
+MSIM="$(default_of modelsim.mk TEST_FAIL_PATTERN)"
+GHDL="$(default_of ghdl.mk TEST_FAIL_PATTERN)"
+XSIM="$(default_of vivado.mk XSIM_FAIL_PATTERN)"
+for v in MSIM GHDL XSIM; do
+    [ -n "${!v}" ] || { echo "  FAIL  no default found for $v"; fail=$((fail + 1)); }
+done
+
+severity() { # severity <expect> <name> <pattern> <transcript line>
+    printf "%s\n" "$4" > "$work/sev.log"
+    run "$1" "$2" TEST_LOG="$work/sev.log" TEST_FAIL_PATTERN="$3"
+}
+severity fail "modelsim default: error"   "$MSIM" "# ** Error: tb.vhd(12): check failed"
+severity fail "modelsim default: failure" "$MSIM" "# ** Failure: tb.vhd(12): regression failed"
+severity fail "modelsim default: fatal"   "$MSIM" "# ** Fatal: (vsim-3421) index out of range"
+severity pass "modelsim default: note"    "$MSIM" "# ** Note: all checks ran"
+severity pass "modelsim default: warning" "$MSIM" "# ** Warning: NUMERIC_STD.TO_INTEGER: metavalue"
+severity fail "ghdl default: assertion error"   "$GHDL" "tb.vhd:9:5:@0ms:(assertion error): check failed"
+severity fail "ghdl default: assertion failure" "$GHDL" "tb.vhd:9:5:@0ms:(assertion failure): regression failed"
+severity fail "ghdl default: report failure"    "$GHDL" "tb.vhd:9:5:@0ms:(report failure): regression failed"
+severity pass "ghdl default: report note"       "$GHDL" "tb.vhd:9:5:@0ms:(report note): all checks ran"
+severity fail "xsim default: error"   "$XSIM" "Error: check failed"
+severity fail "xsim default: failure" "$XSIM" "Failure: regression failed"
+severity fail "xsim default: fatal"   "$XSIM" "Fatal: index out of range"
+severity pass "xsim default: note"    "$XSIM" "Note: all checks ran"
 
 echo "  ----"
 printf '  %d passed, %d failed\n' "$pass" "$fail"
