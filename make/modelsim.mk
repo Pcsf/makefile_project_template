@@ -59,13 +59,14 @@ sim: simulate
 # source of truth, the same way it is for any runner that exits zero
 # regardless of outcome.
 #
-# The default fail pattern is the simulator's own rendering of VHDL severities,
+# The default fail pattern is the simulator's own rendering of VHDL severities
+# (`severity error` and `severity failure` print as `** Error:` and `** Failure:`),
 # so a testbench using assert/report is covered without adopting a convention.
 # A verification library that counts its own alerts and reports in a summary
 # line raises no severity at all: declare that project's TEST_FAIL_PATTERN or
 # TEST_PASS_PATTERN for it.
 TEST_LOG          ?= $(BUILD_DIR)/test_$(VSIM_TOP).log
-TEST_FAIL_PATTERN ?= \*\* (Error|Fatal):
+TEST_FAIL_PATTERN ?= \*\* (Error|Failure|Fatal):
 
 TOOLCHAIN_HAS_TEST := 1
 
