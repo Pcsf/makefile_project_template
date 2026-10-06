@@ -179,11 +179,25 @@ VIVADO_POST_ROUTE_TCL ?=
 # ── Simulation settings (XSim standalone flow: xvhdl → xelab → xsim) ──────────
 VIVADO_SIM_TOP ?= $(VIVADO_TOP)
 XVHDL          := xvhdl
+XVLOG          := xvlog
 XELAB          := xelab
 XSIM           := xsim
 XVHDL_FLAGS    ?= --2008
 XELAB_FLAGS    ?= -debug typical
-XSIM_DIR       := $(BUILD_DIR)/xsim
+# ── Simulating the real IP ────────────────────────────────────────────────────
+# A design with VIVADO_IP usually simulates against behavioural stand-ins: fast,
+# and free of vendor libraries. XSIM_REAL_IP=1 simulates the vendor's own models
+# instead. Each IP is generated for simulation, its sources compiled into their
+# own libraries, and the stand-ins named in VIVADO_IP_STUBS are left out. The
+# two kinds of run keep separate work directories, so switching never leaves a
+# stand-in and a vendor model fighting over one entity name.
+#   VIVADO_IP_STUBS = $(filter src/ip_stubs/%,$(VHDL_SRCS))
+#   make test XSIM_REAL_IP=1
+XSIM_REAL_IP    ?= 0
+VIVADO_IP_STUBS ?=
+_xsim_real      := $(filter 1,$(strip $(XSIM_REAL_IP)))
+
+XSIM_DIR       := $(BUILD_DIR)/xsim$(if $(_xsim_real),_ip)
 TEST_TOP       ?= $(VIVADO_SIM_TOP)
 XSIM_SNAPSHOT  := $(TEST_TOP)_sim
 
@@ -458,13 +472,41 @@ bd-export: params
 # TEST_TOP, TEST_GENERICS and TEST_TIME are the toolchain-neutral case settings
 # described in common.mk. xsim binds generics at elaboration, so each case is
 # elaborated into its own snapshot; the sources are compiled once.
-sim-compile: | $(XSIM_DIR)
+#
+# With XSIM_REAL_IP=1 the IP's own simulation sources are compiled first, each
+# into the library the manifest names, and elaboration searches those libraries.
+XSIM_IP_MANIFEST := $(XSIM_DIR)/ip_sim_files.txt
+_xsim_vhdl = $(if $(_xsim_real),$(filter-out $(VIVADO_IP_STUBS),$(VHDL_SRCS)),$(VHDL_SRCS))
+
+$(XSIM_IP_MANIFEST): $(PROJECT_MK) | params $(XSIM_DIR)
+	@echo "[XSIM] Generating IP simulation models..."
+	cd $(XSIM_DIR) && $(VIVADO) $(VIVADO_FLAGS) \
+	    -log vivado_ipsim.log -journal vivado_ipsim.jou \
+	    -source $(abspath $(VIVADO_SCRIPTS)/vivado_ipsim.tcl) \
+	    -tclargs -params $(abspath $(VIVADO_PARAMS)) \
+	    -outdir $(abspath $(XSIM_DIR)/ip) -manifest $(abspath $@)
+	@test -s $@ || { echo "[XSIM] ERROR: no IP simulation manifest at $@"; exit 1; }
+
+sim-compile: $(if $(_xsim_real),$(XSIM_IP_MANIFEST)) | $(XSIM_DIR)
+ifneq ($(_xsim_real),)
+	@echo "[XSIM] Compiling IP simulation models..."
+	@cd $(XSIM_DIR) && while read lib kind file; do \
+	    case $$kind in \
+	        vhdl)     $(XVHDL) --work $$lib "$$file" ;; \
+	        vhdl2008) $(XVHDL) --2008 --work $$lib "$$file" ;; \
+	        verilog)  $(XVLOG) --work $$lib "$$file" ;; \
+	        sv)       $(XVLOG) --sv --work $$lib "$$file" ;; \
+	        data)     cp -f "$$file" . ;; \
+	    esac > /dev/null || { echo "[XSIM] FAILED compiling $$file into $$lib"; exit 1; }; \
+	done < $(abspath $(XSIM_IP_MANIFEST))
+endif
 	@echo "[XSIM] Compiling VHDL sources..."
-	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(abspath $(VHDL_SRCS))
+	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(abspath $(_xsim_vhdl))
 
 sim-elab: $(if $(strip $(TEST_COMPILED)),,sim-compile) | $(XSIM_DIR)
 	@echo "[XSIM] Elaborating $(TEST_TOP)$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
 	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) \
+	    $(if $(_xsim_real),$$(cut -d' ' -f1 $(abspath $(XSIM_IP_MANIFEST)) | sort -u | grep -vx work | sed 's/^/-L /')) \
 	    $(foreach g,$(TEST_GENERICS),-generic_top "$(g)") \
 	    -s $(XSIM_SNAPSHOT) work.$(TEST_TOP)
 
