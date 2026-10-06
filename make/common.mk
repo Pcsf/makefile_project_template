@@ -68,6 +68,73 @@ else
 endif
 endif
 
+# ── Test cases: TESTS ─────────────────────────────────────────────────────────
+# A project with more than one testbench, or one testbench run several ways,
+# declares its cases and `make test` runs every one of them, each with its own
+# transcript and its own verdict:
+#
+#   TESTS                     case names, run in the order given
+#   TEST_<case>_TOP           top-level unit (default: the case name)
+#   TEST_<case>_GENERICS      NAME=VALUE pairs for the top's generics
+#   TEST_<case>_TIME          simulated-time limit, e.g. 20ms (default: TEST_TIME)
+#   TEST_<case>_PASS_PATTERN  overrides TEST_PASS_PATTERN for this case
+#
+# The settings are the same words on every simulator; each toolchain turns them
+# into its own flags. The sources are compiled once, then each case runs as a
+# separate `make test-run`, so one case cannot leave state behind for the next.
+# A failing case does not stop the list: every case runs, and the summary names
+# the ones that failed.
+#
+# The time limit is what turns a hung simulation into a failure. A testbench
+# that never reaches its completion marker stops at the limit, and the missing
+# TEST_PASS_PATTERN fails it. Without a limit the simulator runs until the
+# design has no events left, which a free-running clock never allows.
+#
+# Select cases from the command line by naming them: make test TESTS=my_case.
+# TESTS= runs the toolchain's single default top, as if no cases were declared.
+#
+# SIM_DATA_DIRS lists directories that testbenches open files from by a path
+# relative to the project root. A simulator that runs in a directory of its own
+# links them there; the others already run in the project root.
+TESTS         ?=
+TEST_TIME     ?=
+SIM_DATA_DIRS ?=
+TEST_CASE_DIR := $(BUILD_DIR)/test
+
+.PHONY: test-cases
+
+ifeq ($(strip $(TOOLCHAIN_HAS_CASES)),1)
+ifeq ($(strip $(TESTS)),)
+test: test-run
+else
+test: test-cases
+endif
+
+test-cases: test-compile
+	@$(MKDIR) $(TEST_CASE_DIR)
+	@failed=; n=0; \
+	$(foreach c,$(TESTS),\
+	    n=$$((n + 1)); \
+	    echo "[TEST] ── case $(c) ──"; \
+	    if $(MAKE) --no-print-directory test-run TESTS= TEST_COMPILED=1 \
+	        TEST_TOP='$(or $(strip $(TEST_$(c)_TOP)),$(c))' \
+	        TEST_GENERICS='$(strip $(TEST_$(c)_GENERICS))' \
+	        TEST_TIME='$(strip $(or $(TEST_$(c)_TIME),$(TEST_TIME)))' \
+	        TEST_LOG='$(TEST_CASE_DIR)/$(c).log' \
+	        $(if $(strip $(TEST_$(c)_PASS_PATTERN)),TEST_PASS_PATTERN='$(TEST_$(c)_PASS_PATTERN)'); \
+	    then :; else failed="$$failed $(c)"; fi;) \
+	if [ -n "$$failed" ]; then \
+	    echo "[TEST] FAILED — $$(echo $$failed | wc -w) of $$n case(s):$$failed"; \
+	    echo "[TEST] Transcripts: $(TEST_CASE_DIR)/<case>.log"; \
+	    exit 1; \
+	fi; \
+	echo "[TEST] PASSED — all $$n case(s)."
+else
+test-cases:
+	@echo "[TEST] TESTS is set, but toolchain '$(TOOLCHAIN)' runs no test cases."
+	@exit 1
+endif
+
 # ── test-report ───────────────────────────────────────────────────────────────
 # `make test` answers one question for the whole suite. `test-report` answers it
 # per test case, by writing JUnit XML to a known path. That is what lets a tool
