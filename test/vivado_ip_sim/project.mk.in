@@ -1,0 +1,19 @@
+# Fixture for tests/vivado_ip_sim.sh, which writes project.mk from this file.
+PROJECT_NAME := vivado_ip_sim
+BUILD_DIR    := build
+TOOLCHAIN    := vivado
+SRC_ROOT     := .
+
+VIVADO_PART    := xc7a35tcpg236-1
+VIVADO_TOP     := tb_mul
+VIVADO_SIM_TOP := tb_mul
+TEST_PASS_PATTERN := CASE PASS
+
+VIVADO_IP := mul8
+VIVADO_IP_mul8_VLNV   := xilinx.com:ip:mult_gen:12.0
+VIVADO_IP_mul8_CONFIG := CONFIG.PortAWidth=8 CONFIG.PortBWidth=8 \
+                         CONFIG.PortAType=Unsigned CONFIG.PortBType=Unsigned \
+                         CONFIG.PipeStages=3
+
+VIVADO_SIM_SRCS  = $(filter tb/% stubs/%,$(VHDL_SRCS))
+VIVADO_IP_STUBS  = $(filter stubs/%,$(VHDL_SRCS))

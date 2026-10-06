@@ -127,7 +127,10 @@ proc vmk_read_xdc {} {
 
 # create_ip needs its -dir to exist already: Vivado does not create it and
 # fails with "[Common 17-69] IP directory '...' does not exist."
-proc vmk_create_ips {} {
+#
+# for_synthesis 0 generates the simulation products only, for an xsim run of
+# the vendor models: no synth_ip, which is most of the time this takes.
+proc vmk_create_ips {{for_synthesis 1}} {
     if {![phas ip]} { return }
     set ipdir [file join [preq outdir] ip]
     file mkdir $ipdir
@@ -140,6 +143,11 @@ proc vmk_create_ips {} {
         if {[phas "ip,$name,config"]} {
             vmk_step "configure IP $name" \
                 [list set_property -dict [pget "ip,$name,config"] [get_ips $name]]
+        }
+        if {!$for_synthesis} {
+            vmk_step "generate IP simulation products $name" \
+                [list generate_target simulation [get_files $name.xci]]
+            continue
         }
         vmk_step "generate IP targets $name" \
             [list generate_target all [get_files $name.xci]]
