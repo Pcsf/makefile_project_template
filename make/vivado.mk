@@ -167,7 +167,8 @@ XSIM           := xsim
 XVHDL_FLAGS    ?= --2008
 XELAB_FLAGS    ?= -debug typical
 XSIM_DIR       := $(BUILD_DIR)/xsim
-XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
+TEST_TOP       ?= $(VIVADO_SIM_TOP)
+XSIM_SNAPSHOT  := $(TEST_TOP)_sim
 
 # ── The simulation verdict ────────────────────────────────────────────────────
 # xsim's exit status is not a verdict, so the transcript is read instead.
@@ -201,7 +202,7 @@ XSIM_SNAPSHOT  := $(VIVADO_SIM_TOP)_sim
 #
 # Patterns are passed to grep -E inside single quotes; a pattern containing a
 # single quote will not survive.
-XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(VIVADO_SIM_TOP).log
+XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(TEST_TOP).log
 XSIM_FAIL_PATTERN ?= ^(Error|Failure|Fatal):|^ERROR:
 XSIM_PASS_PATTERN ?=
 XSIM_CHECK        ?= 1
@@ -214,7 +215,8 @@ TEST_FAIL_PATTERN ?= $(XSIM_FAIL_PATTERN)
 TEST_PASS_PATTERN ?= $(XSIM_PASS_PATTERN)
 TEST_CHECK        ?= $(XSIM_CHECK)
 
-TOOLCHAIN_HAS_TEST := 1
+TOOLCHAIN_HAS_TEST  := 1
+TOOLCHAIN_HAS_CASES := 1
 
 
 # ── Derived source sets ───────────────────────────────────────────────────────
@@ -245,7 +247,7 @@ _vivado_cfg = $(if $(strip $(VIVADO_IP_$(1)_PRESET)),$(call _vivado_preset_dict,
 
 .PHONY: all params synth impl bitstream xsa test \
         project project-gui gui bd-draft bd-gui bd-export \
-        sim sim-gui sim-elab vitis-platform vitis-apps vitis-run program \
+        sim sim-gui sim-elab sim-compile test-compile test-run vitis-platform vitis-apps vitis-run program \
         _help_vivado
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
@@ -433,26 +435,50 @@ bd-export: params
 # XSim writes its work library (xsim.dir) and logs into the current directory,
 # so every step runs inside $(XSIM_DIR) with absolute source paths. Independent
 # of both flows — no project and no in-memory design involved.
-sim-elab: | $(XSIM_DIR)
+#
+# TEST_TOP, TEST_GENERICS and TEST_TIME are the toolchain-neutral case settings
+# described in common.mk. xsim binds generics at elaboration, so each case is
+# elaborated into its own snapshot; the sources are compiled once.
+sim-compile: | $(XSIM_DIR)
 	@echo "[XSIM] Compiling VHDL sources..."
 	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(abspath $(VHDL_SRCS))
-	@echo "[XSIM] Elaborating $(VIVADO_SIM_TOP)..."
-	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) -s $(XSIM_SNAPSHOT) work.$(VIVADO_SIM_TOP)
+
+sim-elab: $(if $(strip $(TEST_COMPILED)),,sim-compile) | $(XSIM_DIR)
+	@echo "[XSIM] Elaborating $(TEST_TOP)$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
+	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) \
+	    $(foreach g,$(TEST_GENERICS),-generic_top "$(g)") \
+	    -s $(XSIM_SNAPSHOT) work.$(TEST_TOP)
 
 # Piped through tee so the run stays live on the console and still leaves the
 # transcript the verdict is read from. The pipe discards xsim's exit status,
 # which is the right trade only because nothing here trusted it in the first
 # place — see the verdict block above.
+#
+# xsim runs inside $(XSIM_DIR), so a testbench opening a file by a path
+# relative to the project root would find nothing there: SIM_DATA_DIRS are
+# linked in first. A time limit runs as a Tcl batch, because -runall takes none.
+_xsim_run_tcl = $(XSIM_DIR)/$(XSIM_SNAPSHOT).run.tcl
+
 sim: sim-elab
-	@echo "[XSIM] Running simulation (batch)..."
-	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) -runall 2>&1 | tee $(abspath $(XSIM_LOG))
+	@echo "[XSIM] Running simulation (batch)$(if $(strip $(TEST_TIME)), for $(strip $(TEST_TIME)))..."
+	@$(foreach d,$(patsubst %/,%,$(SIM_DATA_DIRS)),\
+	    $(MKDIR) $(dir $(XSIM_DIR)/$(d)) && ln -sfn $(abspath $(d)) $(XSIM_DIR)/$(d);)
+	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
+	@rm -f $(abspath $(TEST_LOG))
+	$(if $(strip $(TEST_TIME)),@printf 'run %s\nquit\n' '$(strip $(TEST_TIME))' > $(_xsim_run_tcl))
+	cd $(XSIM_DIR) && $(XSIM) $(XSIM_SNAPSHOT) \
+	    $(if $(strip $(TEST_TIME)),-tclbatch $(abspath $(_xsim_run_tcl)),-runall) \
+	    2>&1 | tee $(abspath $(TEST_LOG))
 	$(call _test_verdict,XSIM)
 
 # `test` is the same batch run with the verdict made non-optional: TEST_CHECK
 # exists for a red phase that asserts the inverse itself, and a target whose
 # whole purpose is the verdict must not honour it.
+test-compile: sim-compile
+
 test: TEST_CHECK := 1
-test: sim
+test-run: TEST_CHECK := 1
+test-run: sim
 
 # No verdict here: the GUI run is interactive and the operator is the check.
 sim-gui: sim-elab
