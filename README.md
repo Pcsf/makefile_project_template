@@ -162,6 +162,7 @@ makefile_project_template/
 │   ├── preset_to_config.sh ← Board preset XML → set_property CONFIG pairs
 │   ├── vivado_lib.tcl     ← Shared Vivado procedures (sources, IP, BD, ELF)
 │   ├── vivado_nonproject.tcl ← In-memory build engine (the build)
+│   ├── vivado_ipsim.tcl   ← IP simulation models for XSIM_REAL_IP
 │   └── vivado_project.tcl ← .xpr flows: inspection + block-design round trip
 ├── templates/
 │   └── Makefile.mk.tmpl   ← Reference copy of the generated fragment
@@ -305,7 +306,7 @@ the symbol rather than leaving a working build of the wrong firmware.
 | `make distclean` | Remove `build/` **and** all generated `Makefile.mk` files |
 | `make info` | Show discovered sources and current settings |
 | `make help` | Print the core targets, then those of the selected toolchain |
-| `make test` | Run the project's checks; the exit status is the verdict |
+| `make test` | Run the project's checks, or every `TESTS` case; the exit status is the verdict |
 | `make test-report` | Run them and write JUnit XML per test case |
 
 Toolchain-specific targets (available when the relevant toolchain is selected):
@@ -429,6 +430,65 @@ The verdict is self-tested. `tests/verdict.sh` exercises it against a passing
 transcript, a failing one, a missing one, an empty one, an unusable pattern, and
 each toolchain default, because a check proven only against a passing run has
 not been proven at all.
+
+### Several testbenches — `TESTS`
+
+A project with more than one testbench, or one testbench run several ways,
+declares its cases and `make test` runs all of them:
+
+```make
+# project.mk
+TEST_PASS_PATTERN := PASS
+TEST_TIME         := 10ms          # default simulated-time limit per case
+
+TESTS := tb_fifo tb_core_full tb_core_lite
+
+TEST_tb_core_full_TOP      := tb_core
+TEST_tb_core_full_GENERICS := G_MODE=FULL
+TEST_tb_core_full_TIME     := 50ms
+
+TEST_tb_core_lite_TOP      := tb_core
+TEST_tb_core_lite_GENERICS := G_MODE=LITE G_DEPTH=16
+```
+
+| Variable | Meaning |
+|---|---|
+| `TESTS` | Case names, run in the order given |
+| `TEST_<case>_TOP` | Top-level unit; defaults to the case name |
+| `TEST_<case>_GENERICS` | `NAME=VALUE` pairs for the top's generics |
+| `TEST_<case>_TIME` | Simulated-time limit; defaults to `TEST_TIME` |
+| `TEST_<case>_PASS_PATTERN` | Overrides `TEST_PASS_PATTERN` for this case |
+| `SIM_DATA_DIRS` | Directories testbenches open files from, relative to the project root |
+
+The settings are the same words on every simulator. GHDL takes generics and the
+limit at run time, Questa at load time, and xsim elaborates a snapshot per case.
+The sources compile once, then each case runs as its own `make test-run`, with
+its transcript at `$(BUILD_DIR)/test/<case>.log` and its own verdict. A failing
+case does not stop the list, and the summary names every case that failed.
+
+**The time limit is what turns a hang into a failure.** A testbench that never
+reaches its completion marker stops at the limit, and the missing
+`TEST_PASS_PATTERN` fails it. Without a limit a simulator runs until the design
+has no events left, which a free-running clock never allows. Set the limit to
+the longest a passing run needs, not to "large".
+
+Run one case by naming it, `make test TESTS=tb_core_lite`. `make test TESTS=`
+runs the toolchain's single default top as if no cases were declared.
+
+**The same testbench is not automatically the same run on every simulator.**
+Questa's default time resolution is 1 ns and it rounds without a warning: a
+`3.333 ns` clock period becomes 3 ns, drifts against `wait for` stimulus, and a
+testbench that passes on GHDL fails one beat out of step. Give Questa the
+resolution the testbenches assume, `VSIM_FLAGS := -t ps` or finer.
+
+`SIM_DATA_DIRS` exists because xsim runs in a directory of its own: a testbench
+that opens `tb/stim/input.hex` finds nothing there. Listed directories are
+linked into the run directory first. GHDL and Questa run in the project root
+and need nothing.
+
+`tests/test_cases.sh <toolchain>` proves every claim above on the toolchain
+named, including that a hanging case fails and a failing case leaves the
+others running.
 
 ### Per-test-case results — `make test-report`
 
@@ -1013,13 +1073,14 @@ inside one in-memory Vivado session and no `.xpr` is written. Everything the
 build needs comes from `project.mk`, so a fresh clone reproduces the design
 exactly.
 
-The flow lives in three committed, reviewable Tcl files under `scripts/`:
+The flow lives in four committed, reviewable Tcl files under `scripts/`:
 
 | File | Role |
 |---|---|
 | `vivado_lib.tcl` | shared procedures — sources, IP, block design, ELF |
 | `vivado_nonproject.tcl` | the in-memory build engine (`synth`→`impl`→`bitstream`→`xsa`) |
 | `vivado_project.tcl` | the `.xpr` flows: inspection and the block-design round trip |
+| `vivado_ipsim.tcl` | the IP's simulation models and their manifest, for `XSIM_REAL_IP` |
 
 None of them contains project-specific data. Make generates exactly one file —
 `build/vivado_params.tcl`, a flat parameter array — and the engine sources it.
@@ -1046,6 +1107,52 @@ Two things that are easy to get wrong here, both learned by hitting them:
   fall back on, so the order from `.compile_order` / `VHDL_SRCS_DIR` is what
   Vivado gets.
 
+### Out-of-context implementation — `VIVADO_SYNTH_MODE`
+
+A core with no board around it yet still needs to be placed and routed on its
+target part, to learn whether it fits and meets timing. In-context synthesis
+cannot do that: it puts an I/O buffer on every top-level port, and a core with a
+few thousand port bits needs more pins than any package has.
+
+```make
+VIVADO_TOP        := my_core_ooc        # a thin wrapper, usually with a clock buffer
+VIVADO_SYNTH_MODE := out_of_context
+```
+
+Synthesis then runs with `-mode out_of_context`: no I/O buffers, and the ports
+become the boundary of a block meant to sit inside a larger design. `make impl`
+places, routes and reports it. Timing across that boundary is only as good as
+the constraints that describe it, so constrain the clock and, where it matters,
+the boundary delays.
+
+A design with no pins has nothing for a bitstream to bond, so `bitstream` and
+`xsa` refuse an out-of-context design before spending a synthesis run on it.
+`impl` is the end of this flow.
+
+### Post-route checks — `VIVADO_POST_ROUTE_TCL`
+
+The flow reports timing and DRC loudly but does not fail on them; whether a
+design that misses timing is still useful is the project's call. A project that
+wants it to be a failure says so with a check:
+
+```make
+VIVADO_POST_ROUTE_TCL := scripts/check_timing.tcl scripts/check_clock.tcl
+```
+
+Each file is sourced in the build session after routing and the reports, with
+the routed design still open, so a check queries it directly with
+`get_timing_paths`, `get_nets` and the rest, with no checkpoint to reopen. A check fails the
+build by raising an error:
+
+```tcl
+set wns [get_property SLACK [get_timing_paths -delay_type max]]
+if {$wns < 0} { error "setup not met: WNS $wns ns" }
+```
+
+`tests/vivado_flow.sh` proves both features against a small design, including
+that a failing check fails the build and that an out-of-context design inserts
+no I/O buffers while an in-context one does.
+
 ### The simulation verdict — why `make sim` reads the transcript
 
 This toolchain is one instance of [The `test` contract](#the-test-contract); the
@@ -1067,10 +1174,10 @@ problem: it propagates `severity failure` into its exit status, so `ghdl.mk`
 needs none of this.
 
 The transcript is therefore the source of truth. `make sim` tees it to
-`$(XSIM_LOG)` and matches two patterns against it:
+`$(TEST_LOG)`, which defaults to `$(XSIM_LOG)`, and matches two patterns against it:
 
 ```make
-XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(VIVADO_SIM_TOP).log
+XSIM_LOG          ?= $(BUILD_DIR)/xsim_$(TEST_TOP).log      # TEST_TOP defaults to VIVADO_SIM_TOP
 XSIM_FAIL_PATTERN ?= ^(Error|Failure|Fatal):|^ERROR:   # any match fails the run
 XSIM_PASS_PATTERN ?=                                    # must appear, or the run fails
 XSIM_CHECK        ?= 1                                  # 0 skips the verdict
@@ -1102,6 +1209,36 @@ red:
 
 Pass it on the command line, not in `project.mk`: a project that sets it
 permanently has switched the check off.
+
+### Simulating the real IP — `XSIM_REAL_IP`
+
+A design built on `VIVADO_IP` usually simulates against behavioural stand-ins:
+they are fast, they need no vendor libraries, and any simulator runs them. The
+stand-ins are still a model of the IP, though, and only the vendor's own
+simulation model says what the hardware will do. `XSIM_REAL_IP=1` runs that
+model instead:
+
+```make
+# project.mk
+VIVADO_SIM_SRCS = $(filter tb/% src/ip_stubs/%,$(VHDL_SRCS))   # never synthesised
+VIVADO_IP_STUBS = $(filter src/ip_stubs/%,$(VHDL_SRCS))         # replaced by the real IP
+```
+
+```sh
+make test XSIM_REAL_IP=1 TESTS="tb_fft tb_core_short"
+```
+
+`scripts/vivado_ipsim.tcl` creates each IP from the same `VIVADO_IP_*` settings
+the build uses, generates its simulation products only (no `synth_ip`), and
+writes a manifest of the files they need, in compile order and each with its
+library. Every file is compiled into that library, the sources in
+`VIVADO_IP_STUBS` are left out, and elaboration searches the IP libraries. The
+models are regenerated when `project.mk` changes.
+
+Real-IP runs keep their own work directory, `$(BUILD_DIR)/xsim_ip`, so a
+stand-in and a vendor model never share a library under one entity name, and
+switching back and forth needs no clean. `tests/vivado_ip_sim.sh` proves the
+switch with an IP whose stand-in has a different latency from the real core.
 
 ### The project is for reading
 

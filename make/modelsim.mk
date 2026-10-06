@@ -32,7 +32,7 @@ VHDL_LIB_COMPILE_TARGETS := $(addprefix compile-lib-,$(VHDL_LIBS))
 # for VHDL-2002/2008, while GHDL_STD is configured as 02/08.
 VCOM_STD_FLAG := $(if $(filter 08,$(GHDL_STD)),-2008,$(if $(filter 00 02,$(GHDL_STD)),-2002,-$(GHDL_STD)))
 
-.PHONY: all compile compile-vhdl-libs simulate sim sim-gui test _help_modelsim $(VHDL_LIB_COMPILE_TARGETS)
+.PHONY: all compile compile-vhdl-libs simulate sim sim-gui test test-compile test-run _help_modelsim $(VHDL_LIB_COMPILE_TARGETS)
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_modelsim
@@ -65,19 +65,28 @@ sim: simulate
 # A verification library that counts its own alerts and reports in a summary
 # line raises no severity at all: declare that project's TEST_FAIL_PATTERN or
 # TEST_PASS_PATTERN for it.
-TEST_LOG          ?= $(BUILD_DIR)/test_$(VSIM_TOP).log
+TEST_TOP          ?= $(VSIM_TOP)
+TEST_LOG          ?= $(BUILD_DIR)/test_$(TEST_TOP).log
 TEST_FAIL_PATTERN ?= \*\* (Error|Failure|Fatal):
 
-TOOLCHAIN_HAS_TEST := 1
+TOOLCHAIN_HAS_TEST  := 1
+TOOLCHAIN_HAS_CASES := 1
 
-test: compile
-	@echo "[MSIM] Testing '$(VSIM_WORK).$(VSIM_TOP)'..."
+# One verdict run of TEST_TOP. TEST_GENERICS and TEST_TIME are the
+# toolchain-neutral case settings described in common.mk: generics are applied
+# at load time, and a time limit replaces `run -all`.
+test-compile: compile
+
+test-run: $(if $(strip $(TEST_COMPILED)),,compile)
+	@echo "[MSIM] Testing '$(VSIM_WORK).$(TEST_TOP)'$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
 	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
+	@rm -f "$(abspath $(TEST_LOG))"
 	@$(VSIM) -c $(VSIM_FLAGS) \
 	    -modelsimini $(VSIM_WORKDIR)/modelsim.ini \
 	    -l $(abspath $(TEST_LOG)) \
-	    -do "run -all; quit -f" \
-	    $(VSIM_WORK).$(VSIM_TOP) > /dev/null 2>&1 || true
+	    $(addprefix -g,$(TEST_GENERICS)) \
+	    -do "$(if $(strip $(TEST_TIME)),run $(strip $(TEST_TIME)),run -all); quit -f" \
+	    $(VSIM_WORK).$(TEST_TOP) > /dev/null 2>&1 || true
 	@cat "$(abspath $(TEST_LOG))" 2>/dev/null || true
 	$(call _test_verdict,MSIM)
 

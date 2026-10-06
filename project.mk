@@ -67,6 +67,21 @@ SCAN_EXCLUDE := example/nios2 example/niosv
 #
 # TEST_REPORT_CMD := ./run_tests.sh
 # TEST_REPORT     := $(BUILD_DIR)/test-results.xml
+#
+# Several testbenches, or one run several ways: name the cases and `make test`
+# runs each with its own transcript and verdict. A case's top defaults to its
+# name; generics are NAME=VALUE pairs; the time limit is simulated time, and is
+# what turns a hung testbench into a failure. Select one with TESTS=<case>.
+#
+# TEST_TIME := 10ms
+# TESTS     := tb_fifo tb_core_full
+# TEST_tb_core_full_TOP      := tb_core
+# TEST_tb_core_full_GENERICS := G_MODE=FULL G_DEPTH=16
+# TEST_tb_core_full_TIME     := 50ms
+#
+# Directories testbenches open files from by a path relative to the project
+# root. xsim runs elsewhere and has them linked in.
+# SIM_DATA_DIRS := tb/stim
 
 # ── VHDL_SRCS_DIR: directory-level compilation order (Layer 1) ───────────────
 # VHDL compilation order matters: packages must precede their users, entities
@@ -128,6 +143,10 @@ VLOG      := vlog
 VSIM      := vsim
 VSIM_WORK := work
 VSIM_TOP  := top
+# Questa's default time resolution is 1 ns and it rounds silently: a 3.333 ns
+# clock becomes 3 ns, drifts against "wait for" stimulus, and a testbench that
+# passes on GHDL fails one beat out. Set the resolution the testbenches assume.
+# VSIM_FLAGS := -t ps
 VSIM_FLAGS :=
 
 # ── Xilinx Vivado settings ────────────────────────────────────────────────────
@@ -135,6 +154,17 @@ VIVADO      := vivado
 VIVADO_PART := xc7a35tcpg236-1   # Target device part number
 VIVADO_TOP  := top                # Top-level design unit
 VIVADO_XDC  :=                    # Constraints file(s), space-separated
+# A core with no board yet is implemented out of context: no I/O buffers, the
+# flow ends at 'make impl', and bitstream/xsa refuse it.
+# VIVADO_SYNTH_MODE := out_of_context
+#
+# Tcl checks sourced after routing with the routed design open; a check fails
+# the build by raising an error.
+# VIVADO_POST_ROUTE_TCL := scripts/check_timing.tcl
+#
+# Simulation-only stand-ins for VIVADO_IP. 'make test XSIM_REAL_IP=1' leaves
+# them out and simulates the vendor's own models instead.
+# VIVADO_IP_STUBS = $(filter src/ip_stubs/%,$(VHDL_SRCS))
 
 # ── Xilinx boot images (bootgen / program_flash) ──────────────────────────────
 # Only needed when the project produces a BOOT.BIN. Each BOOT_IMAGES entry names
