@@ -1,0 +1,33 @@
+# Fixture for tests/test_cases.sh, which writes project.mk from this file with
+# the toolchain under test substituted for @TOOLCHAIN@.
+PROJECT_NAME := test_cases
+BUILD_DIR    := build
+TOOLCHAIN    := @TOOLCHAIN@
+SRC_ROOT     := .
+
+GHDL_STD       := 08
+GHDL_TOP       := tb_generic
+VSIM_TOP       := tb_generic
+VIVADO_SIM_TOP := tb_generic
+VIVADO_PART    := xc7a35tcpg236-1
+VIVADO_TOP     := tb_generic
+
+TEST_PASS_PATTERN := CASE PASS
+SIM_DATA_DIRS     := data
+
+TESTS := default seven mode_b data hang fail
+
+TEST_default_TOP := tb_generic
+
+TEST_seven_TOP      := tb_generic
+TEST_seven_GENERICS := G_VALUE=7
+
+TEST_mode_b_TOP      := tb_generic
+TEST_mode_b_GENERICS := G_VALUE=3 G_MODE=MODE_B
+
+TEST_data_TOP := tb_data
+
+TEST_hang_TOP  := tb_hang
+TEST_hang_TIME := 20us
+
+TEST_fail_TOP := tb_fail

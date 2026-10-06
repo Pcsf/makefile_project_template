@@ -33,7 +33,7 @@ GHDL_FLAGS         := --std=$(GHDL_STD) --workdir=$(GHDL_WORKDIR) \
 
 VHDL_LIB_ANALYZE_TARGETS := $(addprefix analyze-lib-,$(VHDL_LIBS))
 
-.PHONY: all analyze analyze-vhdl-libs elaborate simulate sim test _help_ghdl $(VHDL_LIB_ANALYZE_TARGETS)
+.PHONY: all analyze analyze-vhdl-libs elaborate simulate sim test test-compile test-run _help_ghdl $(VHDL_LIB_ANALYZE_TARGETS)
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
 TOOLCHAIN_HELP_TARGET := _help_ghdl
@@ -107,18 +107,26 @@ elaborate: analyze
 #                    --assert-level=failure for a testbench that reports
 #                    several errors on purpose and checks the total itself.
 GHDL_TEST_FLAGS   ?= --assert-level=error
-TEST_LOG          ?= $(BUILD_DIR)/test_$(GHDL_TOP).log
+TEST_TOP          ?= $(GHDL_TOP)
+TEST_LOG          ?= $(BUILD_DIR)/test_$(TEST_TOP).log
 TEST_FAIL_PATTERN ?= \(assertion (error|failure)\)|\(report (error|failure)\)|^ghdl:error:
 
-TOOLCHAIN_HAS_TEST := 1
+TOOLCHAIN_HAS_TEST  := 1
+TOOLCHAIN_HAS_CASES := 1
 
-# No VCD: this run exists to produce a verdict, not a waveform. Output is
-# captured rather than piped, because a pipe would discard the exit status that
-# --assert-level=error exists to set.
-test: elaborate
-	@echo "[GHDL] Testing '$(GHDL_TOP)'..."
+# One verdict run of TEST_TOP. TEST_GENERICS and TEST_TIME are the
+# toolchain-neutral case settings described in common.mk; GHDL takes both at
+# run time, so a case needs no elaboration of its own beyond the top.
+test-compile: analyze
+
+test-run: $(if $(strip $(TEST_COMPILED)),,analyze)
+	@echo "[GHDL] Testing '$(TEST_TOP)'$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
+	@$(GHDL) -e $(GHDL_FLAGS) $(TEST_TOP)
 	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
-	@$(GHDL) -r $(GHDL_FLAGS) $(GHDL_TOP) $(GHDL_TEST_FLAGS) $(GHDL_SIM_FLAGS) \
+	@$(GHDL) -r $(GHDL_FLAGS) $(TEST_TOP) $(GHDL_TEST_FLAGS) \
+	    $(addprefix -g,$(TEST_GENERICS)) \
+	    $(if $(strip $(TEST_TIME)),--stop-time=$(strip $(TEST_TIME))) \
+	    $(GHDL_SIM_FLAGS) \
 	    > "$(abspath $(TEST_LOG))" 2>&1; rc=$$?; \
 	cat "$(abspath $(TEST_LOG))"; \
 	if [ $$rc -ne 0 ] && [ "$(strip $(TEST_CHECK))" != "0" ]; then \
