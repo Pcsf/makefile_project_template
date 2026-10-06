@@ -62,6 +62,12 @@ set do_impl [expr {$stage in {impl bitstream xsa}}]
 set do_bit  [expr {$stage in {bitstream xsa}}]
 set do_xsa  [expr {$stage eq "xsa"}]
 
+# An out-of-context design has no I/O, so there is nothing for a bitstream to
+# bond. Refuse before a synthesis run is spent finding that out.
+if {[pget synth_mode] eq "out_of_context" && $do_bit} {
+    vmk_die "stage '$stage' needs a design with pins, but it is synthesised out_of_context — the flow ends at 'impl'"
+}
+
 vmk_say "=============================================================="
 vmk_say " Non-Project (in-memory) build"
 vmk_say "   part   : $part"
@@ -105,6 +111,7 @@ vmk_read_xdc
 set synth_args [list -top $top -part $part]
 foreach g [pget generics] { lappend synth_args -generic $g }
 if {[phas synth_directive]} { lappend synth_args -directive [pget synth_directive] }
+if {[phas synth_mode]}      { lappend synth_args -mode [pget synth_mode] }
 
 vmk_step "synthesis" [concat synth_design $synth_args]
 vmk_step "write post_synth.dcp" [list write_checkpoint -force [file join $outdir post_synth.dcp]]
@@ -192,6 +199,12 @@ set drc_bad [get_drc_violations -quiet \
     -filter {SEVERITY == "Critical Warning" || SEVERITY == "Error"}]
 if {[llength $drc_bad] > 0} {
     puts "CRITICAL WARNING: \[FLOW\] [llength $drc_bad] DRC error/critical-warning violations"
+}
+
+# The project's own post-route checks, against the routed design still in memory.
+# A check fails the build by raising an error, which vmk_step turns into exit 1.
+foreach check [pget post_route_tcl] {
+    vmk_step "post-route check [file tail $check]" [list source $check]
 }
 
 if {!$do_bit} {

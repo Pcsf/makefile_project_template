@@ -159,6 +159,23 @@ VIVADO_PHYS_OPT_ON_WNS    ?= 0
 VIVADO_REPORTS            ?= 1
 VIVADO_MAX_THREADS        ?=
 
+# ── Out-of-context synthesis ──────────────────────────────────────────────────
+# A core with no board around it yet is implemented out of context: synthesis
+# inserts no I/O buffers, so place and route measure the core itself rather
+# than thousands of ports no package could bond. Such a design has no pins and
+# cannot become a bitstream, so `bitstream` and `xsa` refuse it; `impl` is the
+# end of the flow.
+#   VIVADO_SYNTH_MODE := out_of_context
+VIVADO_SYNTH_MODE ?=
+
+# ── Post-route checks ─────────────────────────────────────────────────────────
+# Tcl files sourced in the build session once routing is done, after the
+# reports, with the routed design open. A check fails the build by raising an
+# error. This is where a project turns "reported" into "required": the flow
+# itself reports timing and DRC but does not fail on them.
+#   VIVADO_POST_ROUTE_TCL := scripts/check_timing.tcl
+VIVADO_POST_ROUTE_TCL ?=
+
 # ── Simulation settings (XSim standalone flow: xvhdl → xelab → xsim) ──────────
 VIVADO_SIM_TOP ?= $(VIVADO_TOP)
 XVHDL          := xvhdl
@@ -337,6 +354,8 @@ params: | $(VIVADO_OUT)
 	echo "set ::p(phys_opt_on_wns)    {$(VIVADO_PHYS_OPT_ON_WNS)}"; \
 	echo "set ::p(reports) {$(VIVADO_REPORTS)}"; \
 	$(if $(strip $(VIVADO_MAX_THREADS)),echo "set ::p(max_threads) {$(VIVADO_MAX_THREADS)}";) \
+	$(if $(strip $(VIVADO_SYNTH_MODE)),echo "set ::p(synth_mode) {$(strip $(VIVADO_SYNTH_MODE))}";) \
+	echo "set ::p(post_route_tcl) {$(call _tcl_files,$(VIVADO_POST_ROUTE_TCL))}"; \
 	) > $(VIVADO_PARAMS)
 
 # ── Non-Project build ─────────────────────────────────────────────────────────

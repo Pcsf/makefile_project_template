@@ -1,0 +1,13 @@
+# Fixture for tests/vivado_flow.sh, which writes project.mk from this file.
+PROJECT_NAME := vivado_flow
+BUILD_DIR    := build
+TOOLCHAIN    := vivado
+SRC_ROOT     := .
+
+VIVADO_PART := xc7a35tcpg236-1
+VIVADO_TOP  := acc
+VIVADO_XDC  := constraints/clock.xdc
+
+VIVADO_SYNTH_MODE     := out_of_context
+VIVADO_POST_ROUTE_TCL := hooks/marker.tcl
+VIVADO_REPORTS        := 1
