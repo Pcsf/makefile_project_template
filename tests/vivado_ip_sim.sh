@@ -32,6 +32,13 @@ out="$(mk test XSIM_REAL_IP=1)"; rc=$?
 [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q 'LATENCY=3' && ok "XSIM_REAL_IP=1 simulates the vendor model" \
     || bad "XSIM_REAL_IP=1 simulates the vendor model (rc=$rc)" "$out"
 
+# Vivado's xsim.ini maps mult_gen's library into the install; an install that
+# is writable would take the compile silently and the run above would pass.
+[ -n "$(find "$work/build/xsim_ip/xsim.dir" -path '*mult_gen_v12_0*' -name '*.vdb' 2>/dev/null)" ] \
+    && ok "the IP's libraries are compiled into the run's own xsim.dir" \
+    || bad "the IP's libraries are compiled into the run's own xsim.dir" \
+           "$(ls "$work/build/xsim_ip/xsim.dir" 2>&1)"
+
 out="$(mk test)"; rc=$?
 [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q 'LATENCY=0' && ok "switching back runs the stand-in again" \
     || bad "switching back runs the stand-in again (rc=$rc)" "$out"

@@ -1240,6 +1240,17 @@ stand-in and a vendor model never share a library under one entity name, and
 switching back and forth needs no clean. `tests/vivado_ip_sim.sh` proves the
 switch with an IP whose stand-in has a different latency from the real core.
 
+The IP libraries are compiled into that directory too, never into the Vivado
+install. Vivado's own `xsim.ini` maps every IP support library
+(`xbip_utils_v3_0_10`, `mult_gen_v12_0_17`, ...) to a precompiled copy in the
+install, and a bare `--work <lib>` would follow that mapping. Where the install
+is read-only, or ships without the precompiled IP, the compile then fails with
+`VRFC 10-449 Cannot open file ....vdb`. The flow writes `xsim_ip.ini`, which maps
+each library in the manifest to `$(BUILD_DIR)/xsim_ip/xsim.dir`, and passes it
+to `xvhdl`, `xvlog` and `xelab` with `--initfile`, which adds to the default
+`xsim.ini` rather than replacing it. A failed model compile prints the end of
+its transcript, which stays in `$(BUILD_DIR)/xsim_ip/ip_compile.log`.
+
 ### The project is for reading
 
 A `.xpr` is still available, but nothing is ever built from one:
