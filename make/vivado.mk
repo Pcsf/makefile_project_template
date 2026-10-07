@@ -475,8 +475,18 @@ bd-export: params
 #
 # With XSIM_REAL_IP=1 the IP's own simulation sources are compiled first, each
 # into the library the manifest names, and elaboration searches those libraries.
+#
+# Vivado's own xsim.ini maps every IP support library (xbip_utils_v3_0_10,
+# mult_gen_v12_0_17, ...) to a precompiled copy inside the install, and a bare
+# '--work <lib>' resolves through that mapping: the compile writes into the
+# install, and fails with "VRFC 10-449 Cannot open file ....vdb" wherever the
+# install is read-only or ships without the precompiled IP. XSIM_IP_INI maps each
+# library in the manifest to this run's own xsim.dir instead. --initfile adds it
+# on top of the default xsim.ini, so UNISIM and the rest keep their mappings.
 XSIM_IP_MANIFEST := $(XSIM_DIR)/ip_sim_files.txt
+XSIM_IP_INI      := $(XSIM_DIR)/xsim_ip.ini
 _xsim_vhdl = $(if $(_xsim_real),$(filter-out $(VIVADO_IP_STUBS),$(VHDL_SRCS)),$(VHDL_SRCS))
+_xsim_ini  = $(if $(_xsim_real),--initfile $(abspath $(XSIM_IP_INI)))
 
 $(XSIM_IP_MANIFEST): $(PROJECT_MK) | params $(XSIM_DIR)
 	@echo "[XSIM] Generating IP simulation models..."
@@ -487,25 +497,34 @@ $(XSIM_IP_MANIFEST): $(PROJECT_MK) | params $(XSIM_DIR)
 	    -outdir $(abspath $(XSIM_DIR)/ip) -manifest $(abspath $@)
 	@test -s $@ || { echo "[XSIM] ERROR: no IP simulation manifest at $@"; exit 1; }
 
-sim-compile: $(if $(_xsim_real),$(XSIM_IP_MANIFEST)) | $(XSIM_DIR)
+$(XSIM_IP_INI): $(XSIM_IP_MANIFEST)
+	@cut -d' ' -f1 $< | sort -u | grep -vx work | while read lib; do \
+	    $(MKDIR) $(abspath $(XSIM_DIR))/xsim.dir/$$lib; \
+	    echo "$$lib=$(abspath $(XSIM_DIR))/xsim.dir/$$lib"; \
+	done > $@
+
+# Each file's transcript goes to ip_compile.log and is shown only on failure: a
+# model compile prints thousands of lines that say nothing when it succeeds.
+sim-compile: $(if $(_xsim_real),$(XSIM_IP_INI)) | $(XSIM_DIR)
 ifneq ($(_xsim_real),)
 	@echo "[XSIM] Compiling IP simulation models..."
 	@cd $(XSIM_DIR) && while read lib kind file; do \
 	    case $$kind in \
-	        vhdl)     $(XVHDL) --work $$lib "$$file" ;; \
-	        vhdl2008) $(XVHDL) --2008 --work $$lib "$$file" ;; \
-	        verilog)  $(XVLOG) --work $$lib "$$file" ;; \
-	        sv)       $(XVLOG) --sv --work $$lib "$$file" ;; \
+	        vhdl)     $(XVHDL) $(_xsim_ini) --work $$lib "$$file" ;; \
+	        vhdl2008) $(XVHDL) $(_xsim_ini) --2008 --work $$lib "$$file" ;; \
+	        verilog)  $(XVLOG) $(_xsim_ini) --work $$lib "$$file" ;; \
+	        sv)       $(XVLOG) $(_xsim_ini) --sv --work $$lib "$$file" ;; \
 	        data)     cp -f "$$file" . ;; \
-	    esac > /dev/null || { echo "[XSIM] FAILED compiling $$file into $$lib"; exit 1; }; \
+	    esac > ip_compile.log 2>&1 || { tail -n 30 ip_compile.log; \
+	        echo "[XSIM] FAILED compiling $$file into $$lib (transcript: $(XSIM_DIR)/ip_compile.log)"; exit 1; }; \
 	done < $(abspath $(XSIM_IP_MANIFEST))
 endif
 	@echo "[XSIM] Compiling VHDL sources..."
-	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(abspath $(_xsim_vhdl))
+	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(_xsim_ini) $(abspath $(_xsim_vhdl))
 
 sim-elab: $(if $(strip $(TEST_COMPILED)),,sim-compile) | $(XSIM_DIR)
 	@echo "[XSIM] Elaborating $(TEST_TOP)$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
-	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) \
+	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) $(_xsim_ini) \
 	    $(if $(_xsim_real),$$(cut -d' ' -f1 $(abspath $(XSIM_IP_MANIFEST)) | sort -u | grep -vx work | sed 's/^/-L /')) \
 	    $(foreach g,$(TEST_GENERICS),-generic_top "$(g)") \
 	    -s $(XSIM_SNAPSHOT) work.$(TEST_TOP)
