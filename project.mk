@@ -332,3 +332,20 @@ QUARTUS_PGM  := quartus_pgm
 # NIOSV_ROOT  := /path/to/niosv
 # NIOSV_CC    := riscv32-unknown-elf-gcc
 # NIOSV_CMAKE := cmake
+
+# ── Numeric model runtime (project targets) ───────────────────────────────────
+# The framework runs no numeric models. A project whose own targets generate
+# coefficients or golden vectors from .m scripts can pick Octave or Matlab the
+# way TOOLCHAIN picks the HDL tools, provided the scripts run on both. Each
+# command evaluates one quoted string of Matlab-language statements; -batch
+# needs Matlab R2019a or later.
+#
+# M_TOOL := octave
+# # M_TOOL := matlab
+# M_EVAL_octave ?= octave --no-gui -q --eval
+# M_EVAL_matlab ?= matlab -batch
+# M_EVAL = $(M_EVAL_$(M_TOOL))
+# $(if $(M_EVAL),,$(error M_TOOL must be octave or matlab, not '$(M_TOOL)'))
+#
+# coeffs:
+# 	$(M_EVAL) "addpath('model'); gen_coeffs(64, 16);"
