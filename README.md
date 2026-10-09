@@ -47,7 +47,8 @@ $EDITOR project.mk          # set PROJECT_NAME, TOOLCHAIN, compiler flags …
 mkdir -p src/app src/drivers
 cp ~/my_code/*.c src/app/
 
-# 4. Build — the scan runs automatically on the first invocation
+# 4. Build — the scan runs automatically on the first invocation of any
+#    target that needs sources (make, make test, make analyze, …)
 make
 
 # Subsequent builds pick up new/removed files within existing directories
@@ -87,7 +88,8 @@ its own `make/` and `scripts/` paths accordingly; its internal tree
 files all live in the consuming project — the submodule stays pristine.
 
 Anyone cloning the consuming project needs the submodule populated before the
-first build:
+first build. Nothing else: the `Makefile.mk` fragments are gitignored, and the
+first `make <target>` that needs sources scans for them on its own.
 
 ```bash
 git clone --recurse-submodules <project-url>
@@ -226,7 +228,8 @@ mk/Makefile
   2. -include project.mk                      ← the project's data
   3. C_SRCS := CXX_SRCS := VHDL_SRCS := …      ← simply-expanded, see below
   4. include $(shell find … -name Makefile.mk) ← the discovered source lists
-     └─ none found? bootstrap: 'make scan' then 'make all'
+     └─ none found and the goal needs sources? scan now, at parse time,
+        then continue below; scan / clean / distclean / help need none
      └─ VHDL_SRCS_DIR set? rebuild VHDL_SRCS in the declared directory order
   5. include make/$(TOOLCHAIN).mk              ← defines 'all' and the real flow
      include make/common.mk                    ← scan / clean / info / help
@@ -300,7 +303,7 @@ the symbol rather than leaving a working build of the wrong firmware.
 
 | Target | Description |
 |---|---|
-| `make` / `make all` | Scan (first run only) then build |
+| `make` / `make all` | Scan (first run only) then build. Every other target that needs sources scans on its first run too |
 | `make scan` | Re-scan tree; create/update `Makefile.mk` fragments |
 | `make clean` | Remove the `build/` directory |
 | `make distclean` | Remove `build/` **and** all generated `Makefile.mk` files |
@@ -488,7 +491,9 @@ and need nothing.
 
 `tests/test_cases.sh <toolchain>` proves every claim above on the toolchain
 named, including that a hanging case fails and a failing case leaves the
-others running.
+others running. `tests/fresh_clone.sh <toolchain>` runs the same fixture as a
+fresh clone sees it, with no fragments: `make test`, `make info` and plain
+`make` work first time, and `clean`, `distclean` and `help` do not scan.
 
 ### Per-test-case results — `make test-report`
 
