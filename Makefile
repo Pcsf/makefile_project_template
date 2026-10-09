@@ -48,7 +48,7 @@ ifeq ($(OS),Windows_NT)
     RMDIR       := cmd /C rmdir /Q /S
     MKDIR       := cmd /C mkdir
     NULL        := NUL
-    FIND_MK     := $(shell cmd /C "dir /B /S Makefile.mk 2>NUL | findstr /V ""\make\\ \templates\\ \scripts\\ \build\\ \.git\\ $(TPL_WIN_EXCL)"" ")
+    FIND_MK      = $(shell cmd /C "dir /B /S Makefile.mk 2>NUL | findstr /V ""\make\\ \templates\\ \scripts\\ \build\\ \.git\\ $(TPL_WIN_EXCL)"" ")
 else
     HOST_OS     := $(shell uname -s)
     SCAN_SCRIPT := $(TEMPLATE_DIR)scripts/scan_project.sh
@@ -79,6 +79,14 @@ SRC_ROOT     ?= .
 # several excludes; this is the project-level one, alongside the template's own.
 SCAN_FIND_EXCLUDE = $(foreach d,$(SCAN_EXCLUDE),-not -path "$(SRC_ROOT)/$(d)/*")
 
+# The scan, as both 'make scan' and the first-run bootstrap below run it.
+SCAN_ARGS = "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)") $(foreach d,$(SCAN_EXCLUDE),"$(d)")
+ifeq ($(HOST_OS),Windows)
+    SCAN_CMD = $(SCAN_SCRIPT) $(SCAN_ARGS)
+else
+    SCAN_CMD = bash $(SCAN_SCRIPT) $(SCAN_ARGS)
+endif
+
 # ── Source variable initialisation (must precede sub-makefile includes) ───────
 # Using := so that += in each Makefile.mk expands $(wildcard) immediately,
 # giving an up-to-date file list on every make invocation.
@@ -90,9 +98,9 @@ ASM_SRCS  :=
 
 # ── Discover generated Makefile.mk files ─────────────────────────────────────
 ifeq ($(HOST_OS),Windows)
-    SUBMAKEFILES := $(FIND_MK)
+    FIND_SUBMAKEFILES = $(FIND_MK)
 else
-    SUBMAKEFILES := $(shell find $(SRC_ROOT) \
+    FIND_SUBMAKEFILES = $(shell find $(SRC_ROOT) \
         -name "Makefile.mk" \
         -not -path "*/.git/*" \
         -not -path "*/make/*" \
@@ -103,8 +111,26 @@ else
         $(SCAN_FIND_EXCLUDE) \
         2>$(NULL))
 endif
+SUBMAKEFILES := $(FIND_SUBMAKEFILES)
 
-# ── Bootstrap: auto-scan on first run when no Makefile.mk exist yet ──────────
+# ── First run: scan before reading the toolchain ─────────────────────────────
+# The fragments are generated and gitignored, so a fresh clone has none. Every
+# goal that needs the sources scans here, at parse time, and then takes the
+# normal path below, so 'make test', 'make analyze' or any other target works
+# on the first run. scan, clean, distclean and help need no sources.
+PRESCAN_GOALS := scan clean distclean help
+ifeq ($(SUBMAKEFILES),)
+ifneq ($(filter-out $(PRESCAN_GOALS),$(or $(MAKECMDGOALS),all)),)
+    $(info [INFO] No Makefile.mk found — running initial project scan...)
+    _SCAN_OUT := $(shell $(SCAN_CMD) 1>&2)
+    ifneq ($(.SHELLSTATUS),0)
+        $(error initial project scan failed: $(SCAN_CMD))
+    endif
+    SUBMAKEFILES := $(FIND_SUBMAKEFILES)
+endif
+endif
+
+# ── No sources at all: only the utility targets are defined ───────────────────
 ifeq ($(SUBMAKEFILES),)
 
 .DEFAULT_GOAL := _bootstrap
