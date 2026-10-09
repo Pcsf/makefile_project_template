@@ -23,11 +23,7 @@ include $(TEMPLATE_DIR)make/verdict.mk
 # Within existing directories, $(wildcard) in each Makefile.mk already
 # refreshes the source list on every make invocation — no rescan needed.
 scan:
-ifeq ($(HOST_OS),Windows)
-	@$(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)") $(foreach d,$(SCAN_EXCLUDE),"$(d)")
-else
-	@bash $(SCAN_SCRIPT) "$(SRC_ROOT)" $(if $(TEMPLATE_EXCLUDE),"$(TEMPLATE_EXCLUDE)") $(foreach d,$(SCAN_EXCLUDE),"$(d)")
-endif
+	@$(SCAN_CMD)
 	@echo "[INFO] Scan complete. Re-run 'make' to rebuild with any new sources."
 
 # ── test ──────────────────────────────────────────────────────────────────────
