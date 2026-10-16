@@ -30,4 +30,7 @@ TEST_data_TOP := tb_data
 TEST_hang_TOP  := tb_hang
 TEST_hang_TIME := 20us
 
+# Not in TESTS: tests/test_cases.sh runs it on its own.
+TEST_late_TOP := tb_late
+
 TEST_fail_TOP := tb_fail

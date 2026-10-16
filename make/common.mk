@@ -60,7 +60,11 @@ else
 	    $(TEST_CMD) || { echo "[TEST] FAILED — TEST_CMD exited non-zero."; exit 1; }; \
 	fi
 	$(if $(strip $(TEST_LOG)),$(if $(or $(strip $(TEST_FAIL_PATTERN)),$(strip $(TEST_PASS_PATTERN))),$(call _test_verdict,TEST)))
-	@echo "[TEST] PASSED."
+	@if [ "$(strip $(TEST_CHECK))" = "0" ]; then \
+	    echo "[TEST] Verdict SKIPPED (TEST_CHECK=0): this is not a pass."; \
+	else \
+	    echo "[TEST] PASSED."; \
+	fi
 endif
 endif
 
@@ -124,7 +128,12 @@ test-cases: test-compile
 	    echo "[TEST] Transcripts: $(TEST_CASE_DIR)/<case>.log"; \
 	    exit 1; \
 	fi; \
-	echo "[TEST] PASSED — all $$n case(s)."
+	if [ "$(strip $(TEST_CHECK))" = "0" ]; then \
+	    echo "[TEST] Verdict SKIPPED for all $$n case(s) (TEST_CHECK=0): this is not a pass."; \
+	    echo "[TEST] Read the transcripts: $(TEST_CASE_DIR)/<case>.log"; \
+	else \
+	    echo "[TEST] PASSED — all $$n case(s)."; \
+	fi
 else
 test-cases:
 	@echo "[TEST] TESTS is set, but toolchain '$(TOOLCHAIN)' runs no test cases."

@@ -54,6 +54,19 @@ log default | grep -q 'CASE PASS' && ok "cases after a failure still run" \
 printf '%s\n' "$out" | grep -Eq 'FAILED.*\bfail\b' && ok "summary names the failed case" \
     || bad "summary names the failed case" "$out"
 
+out="$(mk test TESTS='fail default' TEST_CHECK=0)"; rc=$?
+[ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q 'Verdict SKIPPED for all 2 case' \
+    && ! printf '%s\n' "$out" | grep -q 'PASSED — all' \
+    && ok "TEST_CHECK=0 reports SKIPPED, never PASSED" \
+    || bad "TEST_CHECK=0 reports SKIPPED, never PASSED (rc=$rc)" "$out"
+
+if [ "$tc" = ghdl ]; then
+    # tb_late reports its marker at 1 us: the 100 ns case limit must stop it first.
+    out="$(mk test TESTS=late TEST_TIME=100ns GHDL_SIM_FLAGS=--stop-time=2us)"; rc=$?
+    [ $rc -ne 0 ] && [ $rc -ne 124 ] && ok "a --stop-time in GHDL_SIM_FLAGS does not lift the case limit" \
+        || bad "a --stop-time in GHDL_SIM_FLAGS does not lift the case limit (rc=$rc)" "$out"
+fi
+
 out="$(mk test TESTS=)"; rc=$?
 [ $rc -eq 0 ] && printf '%s\n' "$out" | grep -q 'VALUE=0' && ok "empty TESTS runs the single default top" \
     || bad "empty TESTS runs the single default top (rc=$rc)" "$out"
