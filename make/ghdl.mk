@@ -117,6 +117,8 @@ TOOLCHAIN_HAS_CASES := 1
 # One verdict run of TEST_TOP. TEST_GENERICS and TEST_TIME are the
 # toolchain-neutral case settings described in common.mk; GHDL takes both at
 # run time, so a case needs no elaboration of its own beyond the top.
+# TEST_TIME is passed after GHDL_SIM_FLAGS: GHDL keeps the last --stop-time,
+# and the case limit must win over a project-wide one.
 test-compile: analyze
 
 test-run: $(if $(strip $(TEST_COMPILED)),,analyze)
@@ -125,8 +127,8 @@ test-run: $(if $(strip $(TEST_COMPILED)),,analyze)
 	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
 	@$(GHDL) -r $(GHDL_FLAGS) $(TEST_TOP) $(GHDL_TEST_FLAGS) \
 	    $(addprefix -g,$(TEST_GENERICS)) \
-	    $(if $(strip $(TEST_TIME)),--stop-time=$(strip $(TEST_TIME))) \
 	    $(GHDL_SIM_FLAGS) \
+	    $(if $(strip $(TEST_TIME)),--stop-time=$(strip $(TEST_TIME))) \
 	    > "$(abspath $(TEST_LOG))" 2>&1; rc=$$?; \
 	cat "$(abspath $(TEST_LOG))"; \
 	if [ $$rc -ne 0 ] && [ "$(strip $(TEST_CHECK))" != "0" ]; then \
