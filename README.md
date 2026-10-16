@@ -318,7 +318,7 @@ Toolchain-specific targets (available when the relevant toolchain is selected):
 |---|---|---|
 | `make analyze` | `ghdl` | Parse and type-check all VHDL |
 | `make elaborate` | `ghdl` | Build simulation binary |
-| `make simulate` | `ghdl` | Run simulation, emit VCD |
+| `make simulate` | `ghdl` | Run simulation, emit a waveform (`GHDL_WAVE`: `vcd`, `ghw`, `fst`) |
 | `make compile` | `modelsim` | Compile HDL into work library |
 | `make simulate` | `modelsim` | Run simulation with vsim in batch mode |
 | `make sim-gui` | `modelsim` | Compile and open the testbench in the simulator GUI |
@@ -661,20 +661,31 @@ consumer before its provider.
 
 ## Configuring project.mk
 
+Put comments on a line of their own. Make keeps the spaces between a value and
+a trailing `#` as part of the value, so `VIVADO_PART := xc7a35tcpg236-1   # part`
+reached Vivado as a part name ending in spaces ("Specified part could not be
+found"). The framework strips the values it passes to Vivado, but a project
+rule that quotes a variable would still see the spaces.
+
 ```makefile
-PROJECT_NAME := my_project   # output binary name
-BUILD_DIR    := build        # build artefact directory
-TOOLCHAIN    := gcc          # see table above
-SCAN_EXCLUDE :=              # dirs the scan must skip, relative to SRC_ROOT
+# output binary name
+PROJECT_NAME := my_project
+# build artefact directory
+BUILD_DIR    := build
+# see table above
+TOOLCHAIN    := gcc
+# dirs the scan must skip, relative to SRC_ROOT
+SCAN_EXCLUDE :=
 
 # C / C++
 CC       := gcc
 CFLAGS   := -Wall -Wextra -O2 -g
 INC_DIRS := include third_party/include
 
-# GHDL
+# GHDL (ghw keeps record signals; a VCD drops them)
 GHDL_STD := 08
 GHDL_TOP := top
+GHDL_WAVE := ghw
 
 # Vivado
 VIVADO_PART := xc7a35tcpg236-1
@@ -686,9 +697,12 @@ VIVADO_XDC  := constraints/pins.xdc
 VIVADO_OPT_DIRECTIVE      := Default
 VIVADO_PLACE_DIRECTIVE    := Default
 VIVADO_ROUTE_DIRECTIVE    := Default
-VIVADO_PHYS_OPT_DIRECTIVE :=          # empty = skip phys_opt entirely
-VIVADO_PHYS_OPT_ON_WNS    := 0        # 1 = run it only when placement missed
-VIVADO_REPORTS            := 1        # utilization, timing, power, DRC, methodology
+# empty = skip phys_opt entirely
+VIVADO_PHYS_OPT_DIRECTIVE :=
+# 1 = run it only when placement missed
+VIVADO_PHYS_OPT_ON_WNS    := 0
+# utilization, timing, power, DRC, methodology
+VIVADO_REPORTS            := 1
 
 # Quartus
 QUARTUS_PART   := EP4CE6E22C8

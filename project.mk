@@ -129,11 +129,19 @@ LIBS     :=
 INC_DIRS :=
 
 # ── GHDL settings ─────────────────────────────────────────────────────────────
+# Keep comments on their own line: make keeps the spaces before a trailing '#'
+# as part of the value, and a tool that quotes the value then sees them.
 GHDL       := ghdl
-GHDL_STD   := 08         # VHDL standard: 87 | 93 | 00 | 02 | 08
+# VHDL standard: 87 | 93 | 00 | 02 | 08
+GHDL_STD   := 08
 GHDL_FLAGS :=
-GHDL_TOP   := top         # Top-level entity for elaboration/simulation
-GHDL_SIM_FLAGS :=         # Extra flags passed to the simulation step
+# Top-level entity for elaboration/simulation
+GHDL_TOP   := top
+# Extra flags passed to the simulation step
+GHDL_SIM_FLAGS :=
+# Waveform written by 'make simulate': vcd | ghw | fst. GHDL drops record
+# signals from a VCD without a warning; ghw and fst keep them.
+GHDL_WAVE  := ghw
 
 # ── ModelSim / QuestaSim settings ─────────────────────────────────────────────
 VLIB      := vlib
@@ -151,9 +159,12 @@ VSIM_FLAGS :=
 
 # ── Xilinx Vivado settings ────────────────────────────────────────────────────
 VIVADO      := vivado
-VIVADO_PART := xc7a35tcpg236-1   # Target device part number
-VIVADO_TOP  := top                # Top-level design unit
-VIVADO_XDC  :=                    # Constraints file(s), space-separated
+# Target device part number
+VIVADO_PART := xc7a35tcpg236-1
+# Top-level design unit
+VIVADO_TOP  := top
+# Constraints file(s), space-separated
+VIVADO_XDC  :=
 # A core with no board yet is implemented out of context: no I/O buffers, the
 # flow ends at 'make impl', and bitstream/xsa refuse it.
 # VIVADO_SYNTH_MODE := out_of_context
@@ -198,8 +209,10 @@ QUARTUS_MAP  := quartus_map
 QUARTUS_FIT  := quartus_fit
 QUARTUS_ASM  := quartus_asm
 QUARTUS_STA  := quartus_sta
-QUARTUS_PART := EP4CE6E22C8       # Target device
-QUARTUS_TOP  := top               # Top-level entity
+# Target device
+QUARTUS_PART := EP4CE6E22C8
+# Top-level entity
+QUARTUS_TOP  := top
 QUARTUS_FAMILY := "Cyclone IV E"
 QUARTUS_PGM  := quartus_pgm
 

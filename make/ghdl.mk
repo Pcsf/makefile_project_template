@@ -1,6 +1,6 @@
 # ==============================================================================
 # ghdl.mk — GHDL VHDL simulator toolchain rules
-# Handles: .vhd/.vhdl → analysis → elaboration → simulation (VCD output)
+# Handles: .vhd/.vhdl → analysis → elaboration → simulation (VCD, GHW or FST output)
 #
 # ── Compilation order strategy ────────────────────────────────────────────────
 # VHDL requires that packages and entities are analysed before any design unit
@@ -88,7 +88,7 @@ elaborate: analyze
 	$(GHDL) -e $(GHDL_FLAGS) $(GHDL_TOP)
 
 # ── The test verdict ──────────────────────────────────────────────────────────
-# `simulate` is the developer-facing run: it writes a VCD and reports what it
+# `simulate` is the developer-facing run: it writes a waveform and reports what it
 # saw. `test` is the machine-facing one, and its exit status is the verdict.
 #
 # Two reasons the exit status of a bare run is not one, both measured on GHDL
@@ -136,12 +136,25 @@ test-run: $(if $(strip $(TEST_COMPILED)),,analyze)
 	$(call _test_verdict,GHDL)
 
 # ── Simulation ────────────────────────────────────────────────────────────────
+# GHDL_WAVE  waveform format written by `simulate`: vcd (default), ghw or fst.
+#            VCD has no record type, and GHDL leaves record signals out of a VCD
+#            without a warning: a design whose ports and registers are records
+#            shows only its scalar signals. GHW and FST keep records, fields
+#            included (GHDL 6.0.0).
+GHDL_WAVE ?= vcd
+_GHDL_WAVE_FILE      = $(BUILD_DIR)/$(PROJECT_NAME).$(strip $(GHDL_WAVE))
+_GHDL_WAVE_FLAG_vcd  = --vcd=$(_GHDL_WAVE_FILE)
+_GHDL_WAVE_FLAG_ghw  = --wave=$(_GHDL_WAVE_FILE)
+_GHDL_WAVE_FLAG_fst  = --fst=$(_GHDL_WAVE_FILE)
+_GHDL_WAVE_FLAG      = $(_GHDL_WAVE_FLAG_$(strip $(GHDL_WAVE)))
+
 simulate: elaborate
+	$(if $(_GHDL_WAVE_FLAG),,$(error GHDL_WAVE is '$(GHDL_WAVE)'; use vcd, ghw or fst))
 	@echo "[GHDL] Simulating '$(GHDL_TOP)'..."
 	$(GHDL) -r $(GHDL_FLAGS) $(GHDL_TOP) \
-	    --vcd=$(BUILD_DIR)/$(PROJECT_NAME).vcd \
+	    $(_GHDL_WAVE_FLAG) \
 	    $(GHDL_SIM_FLAGS)
-	@echo "[GHDL] VCD written to $(BUILD_DIR)/$(PROJECT_NAME).vcd"
+	@echo "[GHDL] Waveform written to $(_GHDL_WAVE_FILE)"
 
 $(BUILD_DIR)/$(PROJECT_NAME): simulate
 
