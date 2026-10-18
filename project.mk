@@ -116,6 +116,7 @@ SCAN_EXCLUDE := example/nios2 example/niosv
 # VHDL_LIB_bitvis_vip_spi_DEPS := uvvm_util
 # VHDL_LIB_uvvm_util_GHDL_FLAGS := -frelaxed-rules
 # VHDL_LIB_uvvm_util_VCOM_FLAGS := -suppress 1236,1346
+# VHDL_LIB_uvvm_util_XVHDL_FLAGS := --relax
 
 # ── GNU C / C++ settings ──────────────────────────────────────────────────────
 CC       := gcc

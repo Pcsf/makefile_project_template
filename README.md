@@ -643,6 +643,7 @@ VHDL_LIB_uvvm_util_SRCS := \
     vendor/uvvm/uvvm_util/src/adaptations_pkg.vhd
 VHDL_LIB_uvvm_util_GHDL_FLAGS := -frelaxed-rules
 VHDL_LIB_uvvm_util_VCOM_FLAGS := -suppress 1236,1346
+VHDL_LIB_uvvm_util_XVHDL_FLAGS := --relax
 
 VHDL_LIB_bitvis_vip_spi_SRCS := \
     vendor/uvvm/bitvis_vip_spi/src/spi_bfm_pkg.vhd
@@ -651,7 +652,9 @@ VHDL_LIB_bitvis_vip_spi_DEPS := uvvm_util
 
 GHDL analyses each named library into `BUILD_DIR/ghdl_work` and adds that
 location to its library search path. ModelSim/Questa creates and maps every
-library in the build-local `modelsim.ini`. Project sources remain in `work`.
+library in the build-local `modelsim.ini`. Vivado XSim compiles each library
+into its own directory under `BUILD_DIR/xsim/xsim.dir`, where elaboration finds
+it by name. Project sources remain in `work`.
 
 `VHDL_LIB_<name>_SRCS` is an ordered list. A library target depends on every
 library named by `VHDL_LIB_<name>_DEPS`, so parallel `make` cannot compile a

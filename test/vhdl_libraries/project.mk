@@ -7,6 +7,7 @@ SCAN_EXCLUDE := hdl/lib_a hdl/lib_b
 GHDL_STD := 08
 GHDL_TOP := tb_named_libraries
 VSIM_TOP := tb_named_libraries
+VIVADO_SIM_TOP := tb_named_libraries
 
 VHDL_SRCS_DIR := hdl
 

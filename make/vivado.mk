@@ -278,7 +278,7 @@ _vivado_cfg = $(if $(strip $(VIVADO_IP_$(1)_PRESET)),$(call _vivado_preset_dict,
 
 .PHONY: all params synth impl bitstream xsa test \
         project project-gui gui bd-draft bd-gui bd-export \
-        sim sim-gui sim-elab sim-compile test-compile test-run vitis-platform vitis-apps vitis-run program \
+        sim sim-gui sim-elab sim-compile $(XSIM_LIB_TARGETS) test-compile test-run vitis-platform vitis-apps vitis-run program \
         _help_vivado
 
 # Listed by 'make help' — see the TOOLCHAIN_HELP_TARGET hook in common.mk.
@@ -503,9 +503,23 @@ $(XSIM_IP_INI): $(XSIM_IP_MANIFEST)
 	    echo "$$lib=$(abspath $(XSIM_DIR))/xsim.dir/$$lib"; \
 	done > $@
 
+# Named VHDL libraries (VHDL_LIBS) compile into their own directory under
+# xsim.dir, providers before consumers, before the project sources that use them.
+XSIM_LIB_TARGETS := $(addprefix xsim-lib-,$(VHDL_LIBS))
+
+define XSIM_VHDL_LIB_template
+xsim-lib-$(1): $$(addprefix xsim-lib-,$$(VHDL_LIB_$(1)_DEPS)) $$(if $$(_xsim_real),$$(XSIM_IP_INI)) | $$(XSIM_DIR)
+	@test -n "$$(strip $$(VHDL_LIB_$(1)_SRCS))" || { echo "[XSIM] No sources configured for VHDL library '$(1)'"; exit 1; }
+	@echo "[XSIM] Compiling library '$(1)' ($$(words $$(VHDL_LIB_$(1)_SRCS)) file(s))..."
+	cd $$(XSIM_DIR) && $$(XVHDL) $$(XVHDL_FLAGS) $$(_xsim_ini) $$(VHDL_LIB_$(1)_XVHDL_FLAGS) \
+	    --work $(1) $$(abspath $$(VHDL_LIB_$(1)_SRCS))
+endef
+
+$(foreach lib,$(VHDL_LIBS),$(eval $(call XSIM_VHDL_LIB_template,$(lib))))
+
 # Each file's transcript goes to ip_compile.log and is shown only on failure: a
 # model compile prints thousands of lines that say nothing when it succeeds.
-sim-compile: $(if $(_xsim_real),$(XSIM_IP_INI)) | $(XSIM_DIR)
+sim-compile: $(if $(_xsim_real),$(XSIM_IP_INI)) $(XSIM_LIB_TARGETS) | $(XSIM_DIR)
 ifneq ($(_xsim_real),)
 	@echo "[XSIM] Compiling IP simulation models..."
 	@cd $(XSIM_DIR) && while read lib kind file; do \
