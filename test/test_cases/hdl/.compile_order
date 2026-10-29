@@ -4,3 +4,4 @@ tb_hang.vhd
 tb_fail.vhd
 tb_data.vhd
 tb_late.vhd
+tb_data_elab.vhd

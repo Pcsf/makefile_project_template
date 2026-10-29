@@ -486,7 +486,8 @@ resolution the testbenches assume, `VSIM_FLAGS := -t ps` or finer.
 
 `SIM_DATA_DIRS` exists because xsim runs in a directory of its own: a testbench
 that opens `tb/stim/input.hex` finds nothing there. Listed directories are
-linked into the run directory first. GHDL and Questa run in the project root
+linked into the run directory before elaboration, because xelab already reads
+the files that initialise constants. GHDL and Questa run in the project root
 and need nothing.
 
 `tests/test_cases.sh <toolchain>` proves every claim above on the toolchain

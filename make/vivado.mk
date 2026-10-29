@@ -536,7 +536,13 @@ endif
 	@echo "[XSIM] Compiling VHDL sources..."
 	cd $(XSIM_DIR) && $(XVHDL) $(XVHDL_FLAGS) $(_xsim_ini) $(abspath $(_xsim_vhdl))
 
+# xelab and xsim run inside $(XSIM_DIR), so a testbench opening a file by a
+# path relative to the project root would find nothing there: SIM_DATA_DIRS
+# are linked in before elaboration, which already reads files that initialise
+# constants.
 sim-elab: $(if $(strip $(TEST_COMPILED)),,sim-compile) | $(XSIM_DIR)
+	@$(foreach d,$(patsubst %/,%,$(SIM_DATA_DIRS)),\
+	    $(MKDIR) $(dir $(XSIM_DIR)/$(d)) && ln -sfn $(abspath $(d)) $(XSIM_DIR)/$(d);)
 	@echo "[XSIM] Elaborating $(TEST_TOP)$(if $(strip $(TEST_GENERICS)), with $(strip $(TEST_GENERICS)))..."
 	cd $(XSIM_DIR) && $(XELAB) $(XELAB_FLAGS) $(_xsim_ini) \
 	    $(if $(_xsim_real),$$(cut -d' ' -f1 $(abspath $(XSIM_IP_MANIFEST)) | sort -u | grep -vx work | sed 's/^/-L /')) \
@@ -548,15 +554,11 @@ sim-elab: $(if $(strip $(TEST_COMPILED)),,sim-compile) | $(XSIM_DIR)
 # which is the right trade only because nothing here trusted it in the first
 # place — see the verdict block above.
 #
-# xsim runs inside $(XSIM_DIR), so a testbench opening a file by a path
-# relative to the project root would find nothing there: SIM_DATA_DIRS are
-# linked in first. A time limit runs as a Tcl batch, because -runall takes none.
+# A time limit runs as a Tcl batch, because -runall takes none.
 _xsim_run_tcl = $(XSIM_DIR)/$(XSIM_SNAPSHOT).run.tcl
 
 sim: sim-elab
 	@echo "[XSIM] Running simulation (batch)$(if $(strip $(TEST_TIME)), for $(strip $(TEST_TIME)))..."
-	@$(foreach d,$(patsubst %/,%,$(SIM_DATA_DIRS)),\
-	    $(MKDIR) $(dir $(XSIM_DIR)/$(d)) && ln -sfn $(abspath $(d)) $(XSIM_DIR)/$(d);)
 	@$(MKDIR) $(dir $(abspath $(TEST_LOG)))
 	@rm -f $(abspath $(TEST_LOG))
 	$(if $(strip $(TEST_TIME)),@printf 'run %s\nquit\n' '$(strip $(TEST_TIME))' > $(_xsim_run_tcl))

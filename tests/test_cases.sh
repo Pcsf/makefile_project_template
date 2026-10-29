@@ -41,6 +41,12 @@ log default | grep -qi 'VALUE=0 MODE=MODE_A' && ok "case without generics keeps 
 log data   | grep -q 'DATA=42' && ok "file opened relative to the project root" \
     || bad "file opened relative to the project root" "$(log data)"
 
+# On a clean build: a run directory linked by an earlier case would hide it.
+rm -rf "$work/build"
+out="$(mk test TESTS=data_elab)"; rc=$?
+[ $rc -eq 0 ] && log data_elab | grep -q 'DATA=42' && ok "file read while the design elaborates" \
+    || bad "file read while the design elaborates (rc=$rc)" "$out"
+
 out="$(mk test TESTS=hang)"; rc=$?
 [ $rc -ne 0 ] && ok "case hitting its time limit fails" \
     || bad "case hitting its time limit fails (rc=0)" "$out"
