@@ -8,10 +8,11 @@
 set -u
 
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/fixture.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-cp -r "$here/../test/vivado_ip_sim/." "$work/"
+copy_fixture vivado_ip_sim "$work"
 cp "$work/project.mk.in" "$work/project.mk"
 echo "include $here/../Makefile" > "$work/Makefile"
 

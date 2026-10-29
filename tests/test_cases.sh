@@ -10,10 +10,11 @@ set -u
 
 tc="${1:?usage: $0 <ghdl|modelsim|vivado>}"
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/fixture.sh"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-cp -r "$here/../test/test_cases/." "$work/"
+copy_fixture test_cases "$work"
 sed "s|@TOOLCHAIN@|$tc|" "$work/project.mk.in" > "$work/project.mk"
 echo "include $here/../Makefile" > "$work/Makefile"
 

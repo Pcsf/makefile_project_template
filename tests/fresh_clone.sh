@@ -9,6 +9,7 @@ set -u
 
 tc="${1:?usage: $0 <ghdl|modelsim|vivado>}"
 here="$(cd "$(dirname "$0")" && pwd)"
+. "$here/fixture.sh"
 root="$(mktemp -d)"
 trap 'rm -rf "$root"' EXIT
 
@@ -18,7 +19,7 @@ bad() { printf '  FAIL  %s\n' "$1"; [ -n "${2:-}" ] && printf '%s\n' "$2" | tail
 
 fresh() { # fresh — a new unscanned copy of the fixture; prints its path
     local w; w="$(mktemp -d -p "$root")"
-    cp -r "$here/../test/test_cases/." "$w/"
+    copy_fixture test_cases "$w"
     sed "s|@TOOLCHAIN@|$tc|" "$w/project.mk.in" > "$w/project.mk"
     echo "include $here/../Makefile" > "$w/Makefile"
     echo "$w"
